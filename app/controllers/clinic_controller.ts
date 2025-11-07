@@ -1,0 +1,1272 @@
+import type { HttpContext } from '@adonisjs/core/http'
+import Client from '#models/client'
+import User from '#models/user'
+import SessionLog from '#models/session_log'
+import Schedule from '#models/schedule'
+import Clinic from '#models/clinic'
+import Invoice from '#models/invoice'
+import Claim from '#models/claim'
+import db from '@adonisjs/lucid/services/db'
+
+export default class ClinicController {
+  /**
+   * Get clinic dashboard data
+   */
+  async dashboard({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      console.log('Dashboard called for user:', user.id, 'clinic:', user.clinicId)
+
+      // Get total clients for this clinic
+      const totalClientsResult = await db.rawQuery(
+        'SELECT COUNT(*) as total FROM clients WHERE clinic_id = ? AND status = ?',
+        [user.clinicId, 'active']
+      )
+      const totalClients = totalClientsResult[0]?.total || 0
+
+      // Get active staff for this clinic (all roles)
+      const activeStaffResult = await db.rawQuery(
+        'SELECT COUNT(*) as total FROM users WHERE clinic_id = ? AND is_active = 1 AND role IN (?, ?, ?, ?)',
+        [user.clinicId, 'BCBA', 'RBT', 'CLINIC', 'ADMIN']
+      )
+      const activeStaff = activeStaffResult[0]?.total || 0
+
+      // Get today's appointments
+      const today = new Date().toISOString().split('T')[0]
+      const todayAppointmentsResult = await db.rawQuery(
+        `SELECT COUNT(*) as total FROM schedules s 
+         JOIN clients c ON s.client_id = c.id 
+         WHERE c.clinic_id = ? AND DATE(s.date) = ?`,
+        [user.clinicId, today]
+      )
+      const todayAppointments = todayAppointmentsResult[0]?.total || 0
+
+      // Calculate monthly revenue from approved sessions
+      const currentMonth = new Date()
+      const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).toISOString().split('T')[0]
+      const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).toISOString().split('T')[0]
+
+      const monthlySessionsResult = await db.rawQuery(
+        `SELECT SUM(total_hours) as totalHours FROM session_logs sl 
+         JOIN clients c ON sl.client_id = c.id 
+         WHERE c.clinic_id = ? AND sl.status = 'approved' 
+         AND DATE(sl.date) BETWEEN ? AND ?`,
+        [user.clinicId, monthStart, monthEnd]
+      )
+      const totalHours = monthlySessionsResult[0]?.totalHours || 0
+      const monthlyRevenue = Math.round(totalHours * 100) // $100 per hour
+
+      // Get pending claims (sessions that are submitted but not approved)
+      const pendingClaimsResult = await db.rawQuery(
+        `SELECT COUNT(*) as total FROM session_logs sl 
+         JOIN clients c ON sl.client_id = c.id 
+         WHERE c.clinic_id = ? AND sl.status = 'submitted'`,
+        [user.clinicId]
+      )
+      const pendingClaims = pendingClaimsResult[0]?.total || 0
+
+      // Calculate completion rate
+      const totalScheduledResult = await db.rawQuery(
+        `SELECT COUNT(*) as total FROM schedules s 
+         JOIN clients c ON s.client_id = c.id 
+         WHERE c.clinic_id = ? AND DATE(s.date) BETWEEN ? AND ?`,
+        [user.clinicId, monthStart, monthEnd]
+      )
+      const totalScheduled = totalScheduledResult[0]?.total || 0
+
+      const completedScheduledResult = await db.rawQuery(
+        `SELECT COUNT(*) as total FROM schedules s 
+         JOIN clients c ON s.client_id = c.id 
+         WHERE c.clinic_id = ? AND s.status = 'completed' 
+         AND DATE(s.date) BETWEEN ? AND ?`,
+        [user.clinicId, monthStart, monthEnd]
+      )
+      const completedScheduled = completedScheduledResult[0]?.total || 0
+
+      const completionRate = totalScheduled > 0 
+        ? Math.round((completedScheduled / totalScheduled) * 100) 
+        : 0
+
+      const summary = {
+        totalClients,
+        activeStaff,
+        todayAppointments,
+        monthlyRevenue,
+        pendingClaims,
+        completionRate,
+      }
+
+      console.log('Dashboard summary:', summary)
+
+      return response.json({
+        success: true,
+        summary,
+        clinic: {
+          id: user.clinicId,
+          name: 'ABA Connect Clinic',
+        },
+      })
+    } catch (error) {
+      console.error('Dashboard error:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch clinic dashboard',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get all clients
+   */
+  async getClients({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const page = request.input('page', 1)
+      const limit = request.input('limit', 10)
+      const status = request.input('status')
+      const search = request.input('search')
+
+      let query = Client.query()
+        .where('clinic_id', user.clinicId!)
+        .preload('bcba')
+        .preload('assignedRbts')
+
+      if (status) {
+        query = query.where('status', status)
+      }
+
+      if (search) {
+        query = query.where((builder) => {
+          builder
+            .where('first_name', 'like', `%${search}%`)
+            .orWhere('last_name', 'like', `%${search}%`)
+        })
+      }
+
+      const clients = await query
+        .orderBy('first_name', 'asc')
+        .paginate(page, limit)
+
+      return response.json({
+        data: clients.all().map(client => ({
+          id: client.id,
+          fullName: client.fullName,
+          firstName: client.firstName,
+          lastName: client.lastName,
+          age: client.age,
+          dateOfBirth: client.dateOfBirth.toISODate(),
+          status: client.status,
+          insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
+          bcbaName: client.bcba?.name || 'Not assigned',
+          assignedRbts: client.assignedRbts.map(rbt => rbt.name),
+          admissionDate: client.admissionDate.toISODate(),
+          createdAt: client.createdAt.toISO(),
+        })),
+        meta: clients.getMeta(),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch clients',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Test client creation
+   */
+  async testClient({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      console.log('Test endpoint called by user:', user.id, 'clinic:', user.clinicId)
+      
+      return response.json({
+        message: 'Test endpoint working',
+        user: {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          clinicId: user.clinicId
+        }
+      })
+    } catch (error) {
+      console.error('Test endpoint error:', error)
+      return response.status(500).json({
+        message: 'Test endpoint failed',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Create new client
+   */
+  async createClient({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      console.log('Creating client for user:', user.id, 'clinic:', user.clinicId)
+      
+      const clientData = request.only([
+        'firstName',
+        'lastName',
+        'dateOfBirth',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'emergencyContactName',
+        'emergencyContactRelationship',
+        'emergencyContactPhone',
+        'insuranceType',
+        'insuranceId',
+        'assignedBcba',
+        'diagnosis',
+      ])
+
+      console.log('Client data received:', clientData)
+
+      const clientPayload = {
+        firstName: clientData.firstName,
+        lastName: clientData.lastName,
+        dateOfBirth: new Date(clientData.dateOfBirth),
+        street: clientData.street,
+        city: clientData.city,
+        state: clientData.state,
+        zipCode: clientData.zipCode,
+        phone: clientData.phone,
+        email: clientData.email,
+        emergencyContactName: clientData.emergencyContactName,
+        emergencyContactRelationship: clientData.emergencyContactRelationship,
+        emergencyContactPhone: clientData.emergencyContactPhone,
+        insuranceType: clientData.insuranceType,
+        insuranceId: clientData.insuranceId,
+        clinicId: user.clinicId!,
+        assignedBcba: clientData.assignedBcba || null,
+        status: 'active',
+        admissionDate: new Date(),
+        diagnosis: clientData.diagnosis || [],
+      }
+
+      console.log('Client payload for creation:', clientPayload)
+
+      // Temporarily use raw SQL to bypass model issues
+      const [result] = await db.rawQuery(
+        'INSERT INTO clients (first_name, last_name, date_of_birth, street, city, state, zip_code, phone, email, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, insurance_type, insurance_id, clinic_id, assigned_bcba, status, admission_date, diagnosis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          clientPayload.firstName,
+          clientPayload.lastName,
+          clientPayload.dateOfBirth.toISOString().split('T')[0],
+          clientPayload.street,
+          clientPayload.city,
+          clientPayload.state,
+          clientPayload.zipCode,
+          clientPayload.phone,
+          clientPayload.email,
+          clientPayload.emergencyContactName,
+          clientPayload.emergencyContactRelationship,
+          clientPayload.emergencyContactPhone,
+          clientPayload.insuranceType,
+          clientPayload.insuranceId,
+          clientPayload.clinicId,
+          clientPayload.assignedBcba,
+          clientPayload.status,
+          clientPayload.admissionDate.toISOString().split('T')[0],
+          JSON.stringify(clientPayload.diagnosis)
+        ]
+      )
+      
+      const clientId = result.insertId
+      const client = await Client.find(clientId)
+
+      console.log('Client created successfully:', client.id)
+
+      await client.load('bcba')
+
+      return response.status(201).json({
+        message: 'Client created successfully',
+        data: {
+          id: client.id,
+          fullName: client.fullName,
+          firstName: client.firstName,
+          lastName: client.lastName,
+          dateOfBirth: client.dateOfBirth.toISODate(),
+          status: client.status,
+          insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
+          bcbaName: client.bcba?.name || 'Not assigned',
+          admissionDate: client.admissionDate.toISODate(),
+          createdAt: client.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('Client creation error:', error)
+      console.error('Error stack:', error.stack)
+      return response.status(400).json({
+        message: 'Failed to create client',
+        error: error.message,
+        details: error.code || 'Unknown error code',
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      })
+    }
+  }
+
+  /**
+   * Get sessions
+   */
+  async getSessions({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const page = request.input('page', 1)
+      const limit = request.input('limit', 50)
+      const status = request.input('status')
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+
+      let query = SessionLog.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', user.clinicId!)
+        })
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+
+      if (status) {
+        query = query.where('status', status)
+      }
+
+      if (startDate) {
+        query = query.where('date', '>=', startDate)
+      }
+
+      if (endDate) {
+        query = query.where('date', '<=', endDate)
+      }
+
+      const sessions = await query
+        .orderBy('date', 'desc')
+        .paginate(page, limit)
+
+      return response.json({
+        data: sessions.all().map(session => ({
+          id: session.id,
+          clientId: session.clientId,
+          clientName: session.client.fullName,
+          rbtId: session.rbtId,
+          rbtName: session.rbt.name,
+          bcbaId: session.bcbaId,
+          bcbaName: session.bcba.name,
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          cptCode: session.cptCode,
+          serviceType: session.serviceType,
+          status: session.status,
+          notes: session.notes,
+          createdAt: session.createdAt.toISO(),
+        })),
+        meta: sessions.getMeta(),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch sessions',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get staff members
+   */
+  async getStaff({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const role = request.input('role')
+
+      let query = User.query()
+        .where('clinic_id', user.clinicId!)
+        .whereIn('role', ['BCBA', 'RBT'])
+
+      if (role) {
+        query = query.where('role', role)
+      }
+
+      const staff = await query
+        .orderBy('name', 'asc')
+
+      return response.json({
+        data: staff.map(member => ({
+          id: member.id,
+          name: member.name,
+          email: member.email,
+          role: member.role,
+          hourlyRate: member.hourlyRate,
+          phone: member.phone,
+          isActive: member.isActive,
+          verified: member.verified,
+          supervisorId: member.supervisorId,
+          createdAt: member.createdAt.toISO(),
+        })),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch staff',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get schedule
+   */
+  async getSchedule({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+      const clientId = request.input('clientId')
+      const rbtId = request.input('rbtId')
+
+      let query = Schedule.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', user.clinicId!)
+        })
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+
+      if (startDate) {
+        query = query.where('date', '>=', startDate)
+      }
+
+      if (endDate) {
+        query = query.where('date', '<=', endDate)
+      }
+
+      if (clientId) {
+        query = query.where('client_id', clientId)
+      }
+
+      if (rbtId) {
+        query = query.where('rbt_id', rbtId)
+      }
+
+      const schedules = await query
+        .orderBy('date', 'asc')
+        .orderBy('start_time', 'asc')
+
+      return response.json({
+        data: schedules.map(schedule => ({
+          id: schedule.id,
+          clientId: schedule.clientId,
+          clientName: schedule.client.fullName,
+          rbtId: schedule.rbtId,
+          rbtName: schedule.rbt.name,
+          bcbaName: schedule.bcba.name,
+          date: schedule.date.toISODate(),
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          location: schedule.location,
+          status: schedule.status,
+          notes: schedule.notes,
+        })),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Update schedule
+   */
+  async updateSchedule({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const scheduleId = params.id
+      const updates = request.only([
+        'date',
+        'startTime',
+        'endTime',
+        'location',
+        'status',
+        'notes',
+      ])
+
+      const schedule = await Schedule.query()
+        .where('id', scheduleId)
+        .preload('client')
+        .firstOrFail()
+
+      // Check permissions - clinic can update schedules for their clients
+      if (schedule.client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      schedule.merge(updates)
+      await schedule.save()
+
+      await schedule.load('rbt')
+      await schedule.load('bcba')
+
+      return response.json({
+        message: 'Schedule updated successfully',
+        data: {
+          id: schedule.id,
+          clientId: schedule.clientId,
+          clientName: schedule.client.fullName,
+          rbtId: schedule.rbtId,
+          rbtName: schedule.rbt.name,
+          bcbaId: schedule.bcbaId,
+          bcbaName: schedule.bcba.name,
+          date: schedule.date.toISODate(),
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          location: schedule.location,
+          status: schedule.status,
+          notes: schedule.notes,
+          updatedAt: schedule.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('Schedule update error:', error)
+      return response.status(400).json({
+        message: 'Failed to update schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Delete schedule
+   */
+  async deleteSchedule({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const scheduleId = params.id
+
+      const schedule = await Schedule.query()
+        .where('id', scheduleId)
+        .preload('client')
+        .firstOrFail()
+
+      // Check permissions - clinic can delete schedules for their clients
+      if (schedule.client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      await schedule.delete()
+
+      return response.json({
+        message: 'Schedule deleted successfully',
+      })
+    } catch (error) {
+      console.error('Schedule delete error:', error)
+      return response.status(400).json({
+        message: 'Failed to delete schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Create schedule
+   */
+  async createSchedule({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { clientId, rbtId, bcbaId, date, startTime, endTime, location, notes } = request.only([
+        'clientId',
+        'rbtId',
+        'bcbaId',
+        'date',
+        'startTime',
+        'endTime',
+        'location',
+        'notes',
+      ])
+
+      // Verify client belongs to this clinic
+      const client = await Client.query()
+        .where('id', clientId)
+        .where('clinic_id', user.clinicId!)
+        .firstOrFail()
+
+      const schedule = await Schedule.create({
+        clientId: client.id,
+        rbtId,
+        bcbaId,
+        date: new Date(date),
+        startTime,
+        endTime,
+        location,
+        notes,
+        status: 'scheduled',
+      })
+
+      await schedule.load('client')
+      await schedule.load('rbt')
+      await schedule.load('bcba')
+
+      return response.status(201).json({
+        message: 'Schedule created successfully',
+        data: {
+          id: schedule.id,
+          clientName: schedule.client.fullName,
+          rbtName: schedule.rbt.name,
+          bcbaName: schedule.bcba.name,
+          date: schedule.date.toISODate(),
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          location: schedule.location,
+          status: schedule.status,
+          notes: schedule.notes,
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to create schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get billing data
+   */
+  async getBilling({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+
+      let query = SessionLog.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', user.clinicId!)
+        })
+        .where('status', 'approved')
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+
+      if (startDate) {
+        query = query.where('date', '>=', startDate)
+      }
+
+      if (endDate) {
+        query = query.where('date', '<=', endDate)
+      }
+
+      const sessions = await query.orderBy('date', 'desc')
+
+      // Group sessions by client for billing
+      const billingData = sessions.reduce((acc: any, session) => {
+        const clientId = session.clientId
+        if (!acc[clientId]) {
+          acc[clientId] = {
+            client: {
+              id: session.client.id,
+              fullName: session.client.fullName,
+              insuranceType: session.client.insuranceType,
+              insuranceId: session.client.insuranceId,
+            },
+            sessions: [],
+            totalHours: 0,
+            totalAmount: 0,
+          }
+        }
+
+        acc[clientId].sessions.push({
+          id: session.id,
+          date: session.date.toISODate(),
+          duration: session.duration,
+          totalHours: session.totalHours,
+          cptCode: session.cptCode,
+          rbtName: session.rbt.name,
+          bcbaName: session.bcba.name,
+          amount: session.totalHours * 100, // Mock rate
+        })
+
+        acc[clientId].totalHours += session.totalHours
+        acc[clientId].totalAmount += session.totalHours * 100
+        return acc
+      }, {})
+
+      return response.json({
+        data: Object.values(billingData),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch billing data',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Generate invoice
+   */
+  async generateInvoice({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { clientId, sessionIds, periodStart, periodEnd } = request.only([
+        'clientId',
+        'sessionIds',
+        'periodStart',
+        'periodEnd',
+      ])
+
+      // Verify client belongs to this clinic
+      const client = await Client.query()
+        .where('id', clientId)
+        .where('clinic_id', user.clinicId!)
+        .firstOrFail()
+
+      // Get sessions
+      const sessions = await SessionLog.query()
+        .whereIn('id', sessionIds)
+        .where('client_id', client.id)
+        .where('status', 'approved')
+
+      if (sessions.length === 0) {
+        return response.status(400).json({
+          message: 'No approved sessions found for invoice',
+        })
+      }
+
+      const totalHours = sessions.reduce((sum, session) => sum + session.totalHours, 0)
+      const amount = totalHours * 100 // Mock rate
+
+      const invoice = await Invoice.create({
+        clientId: client.id,
+        rbtId: sessions[0].rbtId,
+        bcbaId: sessions[0].bcbaId,
+        clinicId: user.clinicId!,
+        sessionIds: sessionIds,
+        periodStart: new Date(periodStart),
+        periodEnd: new Date(periodEnd),
+        sessionCount: sessions.length,
+        totalHours,
+        amount,
+        status: 'draft',
+      })
+
+      return response.status(201).json({
+        message: 'Invoice generated successfully',
+        data: {
+          id: invoice.id,
+          clientId: invoice.clientId,
+          sessionCount: invoice.sessionCount,
+          totalHours: invoice.totalHours,
+          amount: invoice.amount,
+          status: invoice.status,
+          createdAt: invoice.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to generate invoice',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get staff performance data with real-time metrics
+   */
+  async getStaffPerformance({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+
+      // Get all staff members for this clinic
+      const staff = await User.query()
+        .where('clinic_id', user.clinicId!)
+        .whereIn('role', ['BCBA', 'RBT', 'CLINIC', 'ADMIN'])
+        .orderBy('name', 'asc')
+
+      // Get performance data for each staff member
+      const staffWithPerformance = await Promise.all(
+        staff.map(async (member) => {
+          // Get sessions for this staff member (last 30 days)
+          const thirtyDaysAgo = new Date()
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+          let sessionQuery = SessionLog.query()
+            .whereHas('client', (clientQuery) => {
+              clientQuery.where('clinic_id', user.clinicId!)
+            })
+            .where('date', '>=', thirtyDaysAgo)
+
+          if (member.role === 'RBT') {
+            sessionQuery = sessionQuery.where('rbt_id', member.id)
+          } else if (member.role === 'BCBA') {
+            sessionQuery = sessionQuery.where('bcba_id', member.id)
+          }
+
+          const sessions = await sessionQuery
+
+          // Calculate performance metrics
+          const totalSessions = sessions.length
+          const totalHours = sessions.reduce((sum, session) => sum + session.totalHours, 0)
+          const approvedSessions = sessions.filter(s => s.status === 'approved').length
+          const approvalRate = totalSessions > 0 ? Math.round((approvedSessions / totalSessions) * 100) : 0
+          const avgSessionDuration = totalSessions > 0 ? Math.round(totalHours / totalSessions * 60) : 0
+
+          // Get client count for this staff member
+          let clientCount = 0
+          if (member.role === 'RBT') {
+            const clientRbts = await db.rawQuery(
+              'SELECT COUNT(DISTINCT client_id) as count FROM client_rbts WHERE rbt_id = ? AND status = "active"',
+              [member.id]
+            )
+            clientCount = clientRbts[0]?.count || 0
+          } else if (member.role === 'BCBA') {
+            const clients = await Client.query()
+              .where('assigned_bcba', member.id)
+              .where('status', 'active')
+              .count('* as total')
+            clientCount = clients[0].$extras.total
+          }
+
+          return {
+            id: member.id,
+            name: member.name,
+            email: member.email,
+            phone: member.phone,
+            role: member.role,
+            status: member.isActive ? 'active' : 'inactive',
+            hourlyRate: member.hourlyRate,
+            hireDate: member.createdAt.toISODate(),
+            supervisorId: member.supervisorId,
+            clinicId: member.clinicId,
+            permissions: member.permissions || [],
+            performance: {
+              totalSessions,
+              totalHours: Math.round(totalHours * 100) / 100,
+              approvedSessions,
+              approvalRate,
+              avgSessionDuration,
+              clientCount,
+              lastActive: sessions.length > 0 ? sessions[0].date.toISODate() : member.updatedAt?.toISODate() || member.createdAt.toISODate(),
+            },
+          }
+        })
+      )
+
+      return response.json({
+        data: staffWithPerformance,
+      })
+    } catch (error) {
+      console.error('Staff performance error:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch staff performance data',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get all staff members for the clinic
+   */
+  async getAllStaff({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      console.log('Getting all staff for clinic:', user.clinicId)
+
+      // Get all staff members for this clinic
+      const staff = await User.query()
+        .where('clinic_id', user.clinicId!)
+        .whereIn('role', ['RBT', 'BCBA', 'CLINIC', 'ADMIN'])
+        .orderBy('name', 'asc')
+
+      const staffData = staff.map(member => ({
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        phone: member.phone,
+        role: member.role,
+        isActive: member.isActive,
+        hourlyRate: member.hourlyRate,
+        createdAt: member.createdAt.toISO(),
+        updatedAt: member.updatedAt?.toISO(),
+      }))
+
+      console.log(`Found ${staffData.length} staff members`)
+
+      return response.json({
+        success: true,
+        data: staffData,
+      })
+    } catch (error) {
+      console.error('Get all staff error:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch staff members',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Create new staff member
+   */
+  async createStaff({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const staffData = request.only([
+        'name',
+        'email',
+        'phone',
+        'role',
+        'hourlyRate',
+        'isActive',
+      ])
+
+      console.log('Creating staff member:', staffData)
+
+      // Generate default password based on name
+      const defaultPassword = staffData.name.toLowerCase().replace(/\s+/g, '') + '123'
+
+      // Create user with default password
+      const newStaff = await User.create({
+        name: staffData.name,
+        email: staffData.email,
+        password: defaultPassword, // Should be changed on first login
+        role: staffData.role,
+        clinicId: user.clinicId!,
+        phone: staffData.phone || null,
+        hourlyRate: staffData.hourlyRate || null,
+        isActive: staffData.isActive !== undefined ? staffData.isActive : true,
+        verified: false,
+      })
+
+      console.log('Staff member created:', newStaff.id)
+
+      return response.status(201).json({
+        message: 'Staff member created successfully',
+        data: {
+          id: newStaff.id,
+          name: newStaff.name,
+          email: newStaff.email,
+          phone: newStaff.phone,
+          role: newStaff.role,
+          isActive: newStaff.isActive,
+          hourlyRate: newStaff.hourlyRate,
+          createdAt: newStaff.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('Create staff error:', error)
+      return response.status(400).json({
+        message: 'Failed to create staff member',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Update staff member
+   */
+  async updateStaff({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const staffId = params.id
+      const updates = request.only([
+        'name',
+        'email',
+        'phone',
+        'role',
+        'hourlyRate',
+        'isActive',
+      ])
+
+      console.log('Updating staff member:', staffId, updates)
+
+      const staff = await User.query()
+        .where('id', staffId)
+        .where('clinic_id', user.clinicId!)
+        .firstOrFail()
+
+      // Update the staff member
+      staff.merge(updates)
+      await staff.save()
+
+      console.log('Staff member updated successfully')
+
+      return response.json({
+        message: 'Staff member updated successfully',
+        data: {
+          id: staff.id,
+          name: staff.name,
+          email: staff.email,
+          phone: staff.phone,
+          role: staff.role,
+          isActive: staff.isActive,
+          hourlyRate: staff.hourlyRate,
+          updatedAt: staff.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('Update staff error:', error)
+      return response.status(400).json({
+        message: 'Failed to update staff member',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get detailed patient information including parents and documents
+   */
+  async getPatientsDetailed({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+
+      // Get all clients with detailed information
+      const clients = await Client.query()
+        .where('clinic_id', user.clinicId!)
+        .preload('bcba')
+        .orderBy('first_name', 'asc')
+
+      // Get additional data for each client
+      const patientsWithDetails = await Promise.all(
+        clients.map(async (client) => {
+          // Get treatment goals
+          const treatmentGoals = await db.rawQuery(
+            'SELECT * FROM treatment_goals WHERE client_id = ? ORDER BY created_at DESC',
+            [client.id]
+          )
+
+          // Get sessions
+          const sessions = await SessionLog.query()
+            .where('client_id', client.id)
+            .preload('rbt')
+            .orderBy('date', 'desc')
+            .limit(20)
+
+          // Mock parent data (in real app, this would come from a parents table)
+          const parents = [
+            {
+              id: `parent_${client.id}_1`,
+              name: client.emergencyContactName,
+              email: `${client.firstName.toLowerCase()}.parent@email.com`,
+              phone: client.emergencyContactPhone,
+              relationship: client.emergencyContactRelationship?.toLowerCase() || 'parent',
+              isActive: true,
+              lastLogin: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toISOString(),
+            },
+          ]
+
+          // Mock documents (in real app, this would come from a documents table)
+          const documents = [
+            {
+              id: `doc_${client.id}_1`,
+              name: `${client.firstName}_Assessment_Report.pdf`,
+              type: 'assessment',
+              uploadDate: client.createdAt.toISOString(),
+              uploadedBy: client.bcba?.name || 'System',
+              fileSize: 1024 * 1024 * 2.5, // 2.5MB
+              fileType: 'application/pdf',
+              url: `/documents/${client.id}/assessment.pdf`,
+            },
+            {
+              id: `doc_${client.id}_2`,
+              name: `${client.firstName}_Insurance_Card.jpg`,
+              type: 'insurance',
+              uploadDate: client.createdAt.toISOString(),
+              uploadedBy: 'Parent Portal',
+              fileSize: 1024 * 512, // 512KB
+              fileType: 'image/jpeg',
+              url: `/documents/${client.id}/insurance.jpg`,
+            },
+          ]
+
+          // Mock reports
+          const reports = [
+            {
+              id: `report_${client.id}_1`,
+              title: `Monthly Progress Report - ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+              type: 'progress',
+              date: new Date().toISOString(),
+              createdBy: client.bcba?.name || 'BCBA',
+              status: 'completed',
+              summary: `Progress report showing improvements in target behaviors and goal achievement for ${client.firstName}.`,
+            },
+          ]
+
+          return {
+            id: client.id,
+            firstName: client.firstName,
+            lastName: client.lastName,
+            dateOfBirth: client.dateOfBirth.toISODate(),
+            age: client.age,
+            diagnosis: Array.isArray(client.diagnosis) ? client.diagnosis : [client.diagnosis].filter(Boolean),
+            status: client.status,
+            admissionDate: client.admissionDate.toISODate(),
+            assignedBCBA: client.assignedBcba?.toString() || '',
+            bcbaName: client.bcba?.name || 'Not assigned',
+            insuranceType: client.insuranceType,
+            insuranceId: client.insuranceId,
+            address: {
+              street: client.street,
+              city: client.city,
+              state: client.state,
+              zipCode: client.zipCode,
+            },
+            emergencyContact: {
+              name: client.emergencyContactName,
+              relationship: client.emergencyContactRelationship,
+              phone: client.emergencyContactPhone,
+            },
+            parents,
+            documents,
+            reports,
+            treatmentGoals: treatmentGoals.map((goal: any) => ({
+              id: goal.id,
+              title: goal.goal_text?.substring(0, 50) + '...' || 'Treatment Goal',
+              description: goal.goal_text || '',
+              status: goal.status || 'active',
+              targetBehavior: goal.target_behavior || '',
+              measurementMethod: goal.measurement_method || '',
+              targetCriteria: goal.target_criteria || '',
+              progress: Math.floor(Math.random() * 100), // Mock progress
+            })),
+            sessions: sessions.map(session => ({
+              id: session.id,
+              date: session.date.toISODate(),
+              duration: session.duration,
+              rbtName: session.rbt?.name || 'Unknown',
+              status: session.status,
+              notes: session.notes,
+            })),
+          }
+        })
+      )
+
+      return response.json({
+        data: patientsWithDetails,
+      })
+    } catch (error) {
+      console.error('Patients detailed error:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch detailed patient data',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Download document
+   */
+  async downloadDocument({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const documentId = params.id
+
+      // In a real app, you would:
+      // 1. Verify the document exists and belongs to a client in this clinic
+      // 2. Get the actual file from storage (S3, local filesystem, etc.)
+      // 3. Return the file with proper headers
+
+      // For now, return a mock response
+      return response.status(404).json({
+        message: 'Document not found or access denied',
+      })
+    } catch (error) {
+      console.error('Download document error:', error)
+      return response.status(500).json({
+        message: 'Failed to download document',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get reports
+   */
+  async getReports({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const reportType = request.input('type', 'summary')
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+
+      const dateFilter = {
+        start: startDate ? new Date(startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1),
+        end: endDate ? new Date(endDate) : new Date(),
+      }
+
+      if (reportType === 'summary') {
+        // Summary report
+        const totalClients = await Client.query()
+          .where('clinic_id', user.clinicId!)
+          .count('* as total')
+
+        const activeClients = await Client.query()
+          .where('clinic_id', user.clinicId!)
+          .where('status', 'active')
+          .count('* as total')
+
+        const totalSessions = await SessionLog.query()
+          .whereHas('client', (clientQuery) => {
+            clientQuery.where('clinic_id', user.clinicId!)
+          })
+          .whereBetween('date', [dateFilter.start, dateFilter.end])
+          .count('* as total')
+
+        const approvedSessions = await SessionLog.query()
+          .whereHas('client', (clientQuery) => {
+            clientQuery.where('clinic_id', user.clinicId!)
+          })
+          .whereBetween('date', [dateFilter.start, dateFilter.end])
+          .where('status', 'approved')
+          .count('* as total')
+
+        const totalRevenue = await SessionLog.query()
+          .whereHas('client', (clientQuery) => {
+            clientQuery.where('clinic_id', user.clinicId!)
+          })
+          .whereBetween('date', [dateFilter.start, dateFilter.end])
+          .where('status', 'approved')
+
+        const revenue = totalRevenue.reduce((sum, session) => sum + (session.totalHours * 100), 0)
+
+        return response.json({
+          type: 'summary',
+          period: {
+            start: dateFilter.start.toISOString().split('T')[0],
+            end: dateFilter.end.toISOString().split('T')[0],
+          },
+          data: {
+            totalClients: totalClients[0].$extras.total,
+            activeClients: activeClients[0].$extras.total,
+            totalSessions: totalSessions[0].$extras.total,
+            approvedSessions: approvedSessions[0].$extras.total,
+            approvalRate: totalSessions[0].$extras.total > 0
+              ? Math.round((approvedSessions[0].$extras.total / totalSessions[0].$extras.total) * 100)
+              : 0,
+            totalRevenue: revenue,
+          },
+        })
+      }
+
+      return response.status(400).json({
+        message: 'Invalid report type',
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to generate report',
+        error: error.message,
+      })
+    }
+  }
+}

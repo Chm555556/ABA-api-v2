@@ -1,0 +1,353 @@
+import type { HttpContext } from '@adonisjs/core/http'
+import TreatmentGoal from '#models/treatment_goal'
+import Client from '#models/client'
+import BehaviorData from '#models/behavior_data'
+
+export default class TreatmentGoalsController {
+  /**
+   * Get treatment goals
+   */
+  async index({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const clientId = request.input('clientId')
+      const status = request.input('status')
+
+      let query = TreatmentGoal.query()
+        .preload('client')
+        .preload('creator')
+
+      // Role-based filtering
+      if (user.role === 'BCBA') {
+        query = query.where('created_by', user.id)
+      } else if (user.role === 'RBT') {
+        // RBT can see goals for their assigned clients
+        const assignedClients = await Client.query()
+          .whereHas('assignedRbts', (rbtQuery) => {
+            rbtQuery.where('users.id', user.id)
+          })
+        query = query.whereIn('client_id', assignedClients.map(c => c.id))
+      } else if (user.role === 'PARENT') {
+        // Parents can see goals for their children
+        const parentClients = await Client.query()
+          .where('email', user.email)
+          .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
+        
+        if (parentClients.length > 0) {
+          query = query.whereIn('client_id', parentClients.map(c => c.id))
+        } else {
+          return response.json({ data: [] })
+        }
+      } else if (user.role === 'CLINIC') {
+        // Clinic can see all goals for their clients
+        const clinicClients = await Client.query().where('clinic_id', user.clinicId!)
+        query = query.whereIn('client_id', clinicClients.map(c => c.id))
+      }
+
+      if (clientId) {
+        query = query.where('client_id', clientId)
+      }
+
+      if (status) {
+        query = query.where('status', status)
+      }
+
+      const goals = await query.orderBy('created_at', 'desc')
+
+      return response.json({
+        data: goals.map(goal => ({
+          id: goal.id,
+          clientId: goal.clientId,
+          clientName: goal.client.fullName,
+          title: goal.title,
+          description: goal.description,
+          targetBehavior: goal.targetBehavior,
+          measurementType: goal.measurementType,
+          masteryCriteria: goal.masteryCriteria,
+          status: goal.status,
+          createdBy: goal.createdBy,
+          createdByName: goal.creator.name,
+          createdAt: goal.createdAt.toISO(),
+          updatedAt: goal.updatedAt?.toISO(),
+        })),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch treatment goals',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Create a new treatment goal
+   */
+  async store({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        clientId,
+        title,
+        description,
+        targetBehavior,
+        measurementType,
+        masteryCriteria,
+      } = request.only([
+        'clientId',
+        'title',
+        'description',
+        'targetBehavior',
+        'measurementType',
+        'masteryCriteria',
+      ])
+
+      // Verify BCBA has access to this client
+      const client = await Client.findOrFail(clientId)
+      
+      if (user.role === 'BCBA' && client.assignedBcba !== user.id) {
+        return response.status(403).json({
+          message: 'Access denied to this client',
+        })
+      }
+
+      if (user.role === 'CLINIC' && client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied to this client',
+        })
+      }
+
+      const goal = await TreatmentGoal.create({
+        clientId: client.id,
+        title,
+        description,
+        targetBehavior,
+        measurementType,
+        masteryCriteria,
+        status: 'active',
+        createdBy: user.id,
+      })
+
+      await goal.load('client')
+      await goal.load('creator')
+
+      return response.status(201).json({
+        message: 'Treatment goal created successfully',
+        data: {
+          id: goal.id,
+          clientId: goal.clientId,
+          clientName: goal.client.fullName,
+          title: goal.title,
+          description: goal.description,
+          targetBehavior: goal.targetBehavior,
+          measurementType: goal.measurementType,
+          masteryCriteria: goal.masteryCriteria,
+          status: goal.status,
+          createdBy: goal.createdBy,
+          createdByName: goal.creator.name,
+          createdAt: goal.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to create treatment goal',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Update a treatment goal
+   */
+  async update({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const goalId = params.id
+      const updates = request.only([
+        'title',
+        'description',
+        'targetBehavior',
+        'measurementType',
+        'masteryCriteria',
+        'status',
+      ])
+
+      const goal = await TreatmentGoal.query()
+        .where('id', goalId)
+        .preload('client')
+        .firstOrFail()
+
+      // Check permissions
+      if (user.role === 'BCBA' && goal.createdBy !== user.id) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      if (user.role === 'CLINIC' && goal.client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      goal.merge(updates)
+      await goal.save()
+
+      await goal.load('creator')
+
+      return response.json({
+        message: 'Treatment goal updated successfully',
+        data: {
+          id: goal.id,
+          clientId: goal.clientId,
+          clientName: goal.client.fullName,
+          title: goal.title,
+          description: goal.description,
+          targetBehavior: goal.targetBehavior,
+          measurementType: goal.measurementType,
+          masteryCriteria: goal.masteryCriteria,
+          status: goal.status,
+          createdBy: goal.createdBy,
+          createdByName: goal.creator.name,
+          updatedAt: goal.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to update treatment goal',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Delete a treatment goal
+   */
+  async destroy({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const goalId = params.id
+
+      const goal = await TreatmentGoal.query()
+        .where('id', goalId)
+        .preload('client')
+        .firstOrFail()
+
+      // Check permissions
+      if (user.role === 'BCBA' && goal.createdBy !== user.id) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      if (user.role === 'CLINIC' && goal.client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied',
+        })
+      }
+
+      await goal.delete()
+
+      return response.json({
+        message: 'Treatment goal deleted successfully',
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to delete treatment goal',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get goal progress data
+   */
+  async progress({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const goalId = params.id
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+
+      const goal = await TreatmentGoal.query()
+        .where('id', goalId)
+        .preload('client')
+        .firstOrFail()
+
+      // Check permissions
+      if (user.role === 'PARENT') {
+        const hasAccess = await Client.query()
+          .where('id', goal.clientId)
+          .where((builder) => {
+            builder
+              .where('email', user.email)
+              .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
+          })
+          .first()
+
+        if (!hasAccess) {
+          return response.status(403).json({
+            message: 'Access denied',
+          })
+        }
+      }
+
+      // Get behavior data for this goal
+      let behaviorQuery = BehaviorData.query()
+        .where('goal_id', goal.id)
+        .preload('session')
+
+      if (startDate) {
+        behaviorQuery = behaviorQuery.whereHas('session', (sessionQuery) => {
+          sessionQuery.where('date', '>=', startDate)
+        })
+      }
+
+      if (endDate) {
+        behaviorQuery = behaviorQuery.whereHas('session', (sessionQuery) => {
+          sessionQuery.where('date', '<=', endDate)
+        })
+      }
+
+      const behaviorData = await behaviorQuery
+        .orderBy('created_at', 'asc')
+
+      const progressData = behaviorData.map(data => ({
+        date: data.session.date.toISODate(),
+        percentage: data.percentage,
+        correct: data.correct,
+        incorrect: data.incorrect,
+        prompted: data.prompted,
+        total: data.total,
+      }))
+
+      return response.json({
+        data: {
+          goal: {
+            id: goal.id,
+            title: goal.title,
+            description: goal.description,
+            targetBehavior: goal.targetBehavior,
+            measurementType: goal.measurementType,
+            masteryCriteria: goal.masteryCriteria,
+            status: goal.status,
+          },
+          progressData,
+          summary: {
+            totalSessions: progressData.length,
+            averagePercentage: progressData.length > 0 
+              ? Math.round(progressData.reduce((sum, data) => sum + data.percentage, 0) / progressData.length)
+              : 0,
+            trend: progressData.length >= 2 
+              ? (progressData[progressData.length - 1].percentage > progressData[0].percentage ? 'improving' : 'declining')
+              : 'stable',
+          },
+        },
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch goal progress',
+        error: error.message,
+      })
+    }
+  }
+}
