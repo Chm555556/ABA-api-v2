@@ -55,8 +55,29 @@ export default class User extends AuthFinder(BaseModel) {
   @column()
   declare verified: boolean
 
-  @column()
-  declare permissions: string[]
+  // @column()
+  // declare permissions: string[]
+
+//   @column({
+//   prepare: (value: string[] | null) => JSON.stringify(value || []),
+//   consume: (value: string | null) => (value ? JSON.parse(value) : []),
+// })
+// declare permissions: string[]
+
+
+@column({
+  prepare: (value: string[] | null) => JSON.stringify(value || []),
+  consume: (value: string | null) => {
+    try {
+      return value ? JSON.parse(value) : []
+    } catch {
+      return []
+    }
+  },
+})
+declare permissions: string[]
+
+
 
   @column({ serializeAs: null })
   declare rememberMeToken: string | null
