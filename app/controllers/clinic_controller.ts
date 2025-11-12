@@ -7,6 +7,15 @@ import Clinic from '#models/clinic'
 import Invoice from '#models/invoice'
 import Claim from '#models/claim'
 import db from '@adonisjs/lucid/services/db'
+import { DateTime } from 'luxon'
+// import { createClientValidator, createScheduleValidator } from '#validators/client_validator'
+import {
+  createClientValidator,
+  createScheduleValidator,
+  validateWithNormalizer,
+} from '#validators/client_validator'
+
+
 
 export default class ClinicController {
   /**
@@ -202,116 +211,232 @@ export default class ClinicController {
   /**
    * Create new client
    */
-  async createClient({ auth, request, response }: HttpContext) {
-    try {
-      const user = auth.user!
-      console.log('Creating client for user:', user.id, 'clinic:', user.clinicId)
+  // async createClient({ auth, request, response }: HttpContext) {
+  //   try {
+  //     const user = auth.user!
+  //     console.log('Creating client for user:', user.id, 'clinic:', user.clinicId)
       
-      const clientData = request.only([
-        'firstName',
-        'lastName',
-        'dateOfBirth',
-        'street',
-        'city',
-        'state',
-        'zipCode',
-        'phone',
-        'email',
-        'emergencyContactName',
-        'emergencyContactRelationship',
-        'emergencyContactPhone',
-        'insuranceType',
-        'insuranceId',
-        'assignedBcba',
-        'diagnosis',
-      ])
+  //     const clientData = request.only([
+  //       'firstName',
+  //       'lastName',
+  //       'dateOfBirth',
+  //       'street',
+  //       'city',
+  //       'state',
+  //       'zipCode',
+  //       'phone',
+  //       'email',
+  //       'emergencyContactName',
+  //       'emergencyContactRelationship',
+  //       'emergencyContactPhone',
+  //       'insuranceType',
+  //       'insuranceId',
+  //       'assignedBcba',
+  //       'diagnosis',
+  //     ])
 
-      console.log('Client data received:', clientData)
+  //     console.log('Client data received:', clientData)
 
-      const clientPayload = {
-        firstName: clientData.firstName,
-        lastName: clientData.lastName,
-        dateOfBirth: new Date(clientData.dateOfBirth),
-        street: clientData.street,
-        city: clientData.city,
-        state: clientData.state,
-        zipCode: clientData.zipCode,
-        phone: clientData.phone,
-        email: clientData.email,
-        emergencyContactName: clientData.emergencyContactName,
-        emergencyContactRelationship: clientData.emergencyContactRelationship,
-        emergencyContactPhone: clientData.emergencyContactPhone,
-        insuranceType: clientData.insuranceType,
-        insuranceId: clientData.insuranceId,
-        clinicId: user.clinicId!,
-        assignedBcba: clientData.assignedBcba || null,
-        status: 'active',
-        admissionDate: new Date(),
-        diagnosis: clientData.diagnosis || [],
-      }
+  //     const clientPayload = {
+  //       firstName: clientData.firstName,
+  //       lastName: clientData.lastName,
+  //       dateOfBirth: new Date(clientData.dateOfBirth),
+  //       street: clientData.street,
+  //       city: clientData.city,
+  //       state: clientData.state,
+  //       zipCode: clientData.zipCode,
+  //       phone: clientData.phone,
+  //       email: clientData.email,
+  //       emergencyContactName: clientData.emergencyContactName,
+  //       emergencyContactRelationship: clientData.emergencyContactRelationship,
+  //       emergencyContactPhone: clientData.emergencyContactPhone,
+  //       insuranceType: clientData.insuranceType,
+  //       insuranceId: clientData.insuranceId,
+  //       clinicId: user.clinicId!,
+  //       assignedBcba: clientData.assignedBcba || null,
+  //       status: 'active',
+  //       admissionDate: new Date(),
+  //       diagnosis: clientData.diagnosis || [],
+  //     }
 
-      console.log('Client payload for creation:', clientPayload)
+  //     console.log('Client payload for creation:', clientPayload)
 
-      // Temporarily use raw SQL to bypass model issues
-      const [result] = await db.rawQuery(
-        'INSERT INTO clients (first_name, last_name, date_of_birth, street, city, state, zip_code, phone, email, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, insurance_type, insurance_id, clinic_id, assigned_bcba, status, admission_date, diagnosis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [
-          clientPayload.firstName,
-          clientPayload.lastName,
-          clientPayload.dateOfBirth.toISOString().split('T')[0],
-          clientPayload.street,
-          clientPayload.city,
-          clientPayload.state,
-          clientPayload.zipCode,
-          clientPayload.phone,
-          clientPayload.email,
-          clientPayload.emergencyContactName,
-          clientPayload.emergencyContactRelationship,
-          clientPayload.emergencyContactPhone,
-          clientPayload.insuranceType,
-          clientPayload.insuranceId,
-          clientPayload.clinicId,
-          clientPayload.assignedBcba,
-          clientPayload.status,
-          clientPayload.admissionDate.toISOString().split('T')[0],
-          JSON.stringify(clientPayload.diagnosis)
-        ]
-      )
+  //     // Temporarily use raw SQL to bypass model issues
+  //     const [result] = await db.rawQuery(
+  //       'INSERT INTO clients (first_name, last_name, date_of_birth, street, city, state, zip_code, phone, email, emergency_contact_name, emergency_contact_relationship, emergency_contact_phone, insurance_type, insurance_id, clinic_id, assigned_bcba, status, admission_date, diagnosis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  //       [
+  //         clientPayload.firstName,
+  //         clientPayload.lastName,
+  //         clientPayload.dateOfBirth.toISOString().split('T')[0],
+  //         clientPayload.street,
+  //         clientPayload.city,
+  //         clientPayload.state,
+  //         clientPayload.zipCode,
+  //         clientPayload.phone,
+  //         clientPayload.email,
+  //         clientPayload.emergencyContactName,
+  //         clientPayload.emergencyContactRelationship,
+  //         clientPayload.emergencyContactPhone,
+  //         clientPayload.insuranceType,
+  //         clientPayload.insuranceId,
+  //         clientPayload.clinicId,
+  //         clientPayload.assignedBcba,
+  //         clientPayload.status,
+  //         clientPayload.admissionDate.toISOString().split('T')[0],
+  //         JSON.stringify(clientPayload.diagnosis)
+  //       ]
+  //     )
       
-      const clientId = result.insertId
-      const client = await Client.find(clientId)
+  //     const clientId = result.insertId
+  //     const client = await Client.find(clientId)
 
-      console.log('Client created successfully:', client.id)
+  //     console.log('Client created successfully:', client.id)
 
-      await client.load('bcba')
+  //     await client.load('bcba')
 
-      return response.status(201).json({
-        message: 'Client created successfully',
-        data: {
-          id: client.id,
-          fullName: client.fullName,
-          firstName: client.firstName,
-          lastName: client.lastName,
-          dateOfBirth: client.dateOfBirth.toISODate(),
-          status: client.status,
-          insuranceType: client.insuranceType,
-          insuranceId: client.insuranceId,
-          bcbaName: client.bcba?.name || 'Not assigned',
-          admissionDate: client.admissionDate.toISODate(),
-          createdAt: client.createdAt.toISO(),
-        },
-      })
-    } catch (error) {
-      console.error('Client creation error:', error)
-      console.error('Error stack:', error.stack)
+  //     return response.status(201).json({
+  //       message: 'Client created successfully',
+  //       data: {
+  //         id: client.id,
+  //         fullName: client.fullName,
+  //         firstName: client.firstName,
+  //         lastName: client.lastName,
+  //         dateOfBirth: client.dateOfBirth.toISODate(),
+  //         status: client.status,
+  //         insuranceType: client.insuranceType,
+  //         insuranceId: client.insuranceId,
+  //         bcbaName: client.bcba?.name || 'Not assigned',
+  //         admissionDate: client.admissionDate.toISODate(),
+  //         createdAt: client.createdAt.toISO(),
+  //       },
+  //     })
+  //   } catch (error) {
+  //     console.error('Client creation error:', error)
+  //     console.error('Error stack:', error.stack)
+  //     return response.status(400).json({
+  //       message: 'Failed to create client',
+  //       error: error.message,
+  //       details: error.code || 'Unknown error code',
+  //       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+  //     })
+  //   }
+  // }
+
+// async createClient({ auth, request, response }: HttpContext) {
+//   try {
+//     const user = auth.user!
+//     // const clientData = await request.validateUsing(createClientValidator)
+
+//     const clientData = await validateWithNormalizer(request, createClientValidator)
+
+
+//     const client = await Client.create({
+//       ...clientData,
+//       dateOfBirth: new Date(clientData.dateOfBirth),
+//       clinicId: user.clinicId!,
+//       status: 'active',
+//       admissionDate: new Date(),
+//     })
+
+//     await client.load('bcba')
+
+//     return response.status(201).json({
+//       success: true,
+//       message: 'Client created successfully',
+//       data: client.serialize(),
+//     })
+//   } catch (error) {
+//     console.error('createClient error:', error)
+//     return response.status(400).json({
+//       success: false,
+//       message: 'Failed to create client',
+//       error: error.messages || error.message,
+//     })
+//   }
+// }
+
+
+//import { DateTime } from 'luxon'
+
+async createClient({ auth, request, response }: HttpContext) {
+  try {
+    const user = auth.user!
+    const clientData = await validateWithNormalizer(request, createClientValidator)
+
+    // Handle both string and Date values safely
+    let parsedDate: DateTime
+
+    if (clientData.dateOfBirth instanceof Date) {
+      parsedDate = DateTime.fromJSDate(clientData.dateOfBirth)
+    } else {
+      parsedDate = DateTime.fromISO(String(clientData.dateOfBirth))
+    }
+
+    if (!parsedDate.isValid) {
       return response.status(400).json({
-        message: 'Failed to create client',
-        error: error.message,
-        details: error.code || 'Unknown error code',
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        success: false,
+        message: 'Invalid date format. Expected YYYY-MM-DD',
       })
     }
+
+    const client = await Client.create({
+      ...clientData,
+      dateOfBirth: parsedDate,   // ✅ always a valid Luxon DateTime
+      clinicId: user.clinicId!,
+      status: 'active',
+      admissionDate: DateTime.now(),
+    })
+
+    await client.load('bcba')
+
+    return response.status(201).json({
+      success: true,
+      message: 'Client created successfully',
+      data: client.serialize(),
+    })
+  } catch (error) {
+    console.error('createClient error:', error)
+    return response.status(400).json({
+      success: false,
+      message: 'Failed to create client',
+      error: error.messages || error.message,
+    })
   }
+}
+
+
+
+// async createClient({ auth, request, response }: HttpContext) {
+//   try {
+//     const user = auth.user!
+//     const clientData = await validateWithNormalizer(request, createClientValidator)
+
+//     const client = await Client.create({
+//       ...clientData,
+//       dateOfBirth: DateTime.fromISO(clientData.dateOfBirth), // ✅ Luxon DateTime
+//       clinicId: user.clinicId!,
+//       status: 'active',
+//       admissionDate: DateTime.now(), // ✅ Luxon DateTime
+//     })
+
+//     await client.load('bcba')
+
+//     return response.status(201).json({
+//       success: true,
+//       message: 'Client created successfully',
+//       data: client.serialize(),
+//     })
+//   } catch (error) {
+//     console.error('createClient error:', error)
+//     return response.status(400).json({
+//       success: false,
+//       message: 'Failed to create client',
+//       error: error.messages || error.message,
+//     })
+//   }
+// }
+
+
 
   /**
    * Get sessions
@@ -582,64 +707,139 @@ export default class ClinicController {
   /**
    * Create schedule
    */
-  async createSchedule({ auth, request, response }: HttpContext) {
-    try {
-      const user = auth.user!
-      const { clientId, rbtId, bcbaId, date, startTime, endTime, location, notes } = request.only([
-        'clientId',
-        'rbtId',
-        'bcbaId',
-        'date',
-        'startTime',
-        'endTime',
-        'location',
-        'notes',
-      ])
+  // async createSchedule({ auth, request, response }: HttpContext) {
+  //   try {
+  //     const user = auth.user!
+  //     const { clientId, rbtId, bcbaId, date, startTime, endTime, location, notes } = request.only([
+  //       'clientId',
+  //       'rbtId',
+  //       'bcbaId',
+  //       'date',
+  //       'startTime',
+  //       'endTime',
+  //       'location',
+  //       'notes',
+  //     ])
 
-      // Verify client belongs to this clinic
-      const client = await Client.query()
-        .where('id', clientId)
-        .where('clinic_id', user.clinicId!)
-        .firstOrFail()
+  //     // Verify client belongs to this clinic
+  //     const client = await Client.query()
+  //       .where('id', clientId)
+  //       .where('clinic_id', user.clinicId!)
+  //       .firstOrFail()
 
-      const schedule = await Schedule.create({
-        clientId: client.id,
-        rbtId,
-        bcbaId,
-        date: new Date(date),
-        startTime,
-        endTime,
-        location,
-        notes,
-        status: 'scheduled',
-      })
+  //     const schedule = await Schedule.create({
+  //       clientId: client.id,
+  //       rbtId,
+  //       bcbaId,
+  //       date: new Date(date),
+  //       startTime,
+  //       endTime,
+  //       location,
+  //       notes,
+  //       status: 'scheduled',
+  //     })
 
-      await schedule.load('client')
-      await schedule.load('rbt')
-      await schedule.load('bcba')
+  //     await schedule.load('client')
+  //     await schedule.load('rbt')
+  //     await schedule.load('bcba')
 
-      return response.status(201).json({
-        message: 'Schedule created successfully',
-        data: {
-          id: schedule.id,
-          clientName: schedule.client.fullName,
-          rbtName: schedule.rbt.name,
-          bcbaName: schedule.bcba.name,
-          date: schedule.date.toISODate(),
-          startTime: schedule.startTime,
-          endTime: schedule.endTime,
-          location: schedule.location,
-          status: schedule.status,
-          notes: schedule.notes,
-        },
-      })
-    } catch (error) {
-      return response.status(400).json({
-        message: 'Failed to create schedule',
-        error: error.message,
-      })
-    }
+  //     return response.status(201).json({
+  //       message: 'Schedule created successfully',
+  //       data: {
+  //         id: schedule.id,
+  //         clientName: schedule.client.fullName,
+  //         rbtName: schedule.rbt.name,
+  //         bcbaName: schedule.bcba.name,
+  //         date: schedule.date.toISODate(),
+  //         startTime: schedule.startTime,
+  //         endTime: schedule.endTime,
+  //         location: schedule.location,
+  //         status: schedule.status,
+  //         notes: schedule.notes,
+  //       },
+  //     })
+  //   } catch (error) {
+  //     return response.status(400).json({
+  //       message: 'Failed to create schedule',
+  //       error: error.message,
+  //     })
+  //   }
+  // }
+
+// async createSchedule({ auth, request, response }: HttpContext) {
+//   try {
+//     const user = auth.user!
+//     // const payload = await request.validateUsing(createScheduleValidator)
+// const payload = await validateWithNormalizer(request, createScheduleValidator)
+
+
+//     const client = await Client.query()
+//       .where('id', payload.clientId)
+//       .where('clinic_id', user.clinicId!)
+//       .firstOrFail()
+
+//     const schedule = await Schedule.create({
+//       ...payload,
+//       date: new Date(payload.date),
+//       status: 'scheduled',
+//     })
+
+//     await schedule.load('client')
+//     await schedule.load('rbt')
+//     await schedule.load('bcba')
+
+//     return response.status(201).json({
+//       success: true,
+//       message: 'Schedule created successfully',
+//       data: schedule.serialize(),
+//     })
+//   } catch (error) {
+//     console.error('createSchedule error:', error)
+//     return response.status(400).json({
+//       success: false,
+//       message: 'Failed to create schedule',
+//       error: error.messages || error.message,
+//     })
+//   }
+// }
+
+//import { DateTime } from 'luxon'
+
+async createSchedule({ auth, request, response }: HttpContext) {
+  try {
+    const user = auth.user!
+    const payload = await validateWithNormalizer(request, createScheduleValidator)
+
+    const client = await Client.query()
+      .where('id', payload.clientId)
+      .where('clinic_id', user.clinicId!)
+      .firstOrFail()
+
+    const schedule = await Schedule.create({
+      ...payload,
+      date: DateTime.fromISO(payload.date), // ✅ Luxon DateTime
+      status: 'scheduled',
+    })
+
+    await schedule.load('client')
+    await schedule.load('rbt')
+    await schedule.load('bcba')
+
+    return response.status(201).json({
+      success: true,
+      message: 'Schedule created successfully',
+      data: schedule.serialize(),
+    })
+  } catch (error) {
+    console.error('createSchedule error:', error)
+    return response.status(400).json({
+      success: false,
+      message: 'Failed to create schedule',
+      error: error.messages || error.message,
+    })
   }
+}
+
 
   /**
    * Get billing data
