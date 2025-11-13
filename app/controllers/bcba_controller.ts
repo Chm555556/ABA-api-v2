@@ -1,4 +1,5 @@
 import type { HttpContext } from '@adonisjs/core/http'
+import { DateTime } from 'luxon'
 import Client from '#models/client'
 import SessionLog from '#models/session_log'
 import User from '#models/user'
@@ -176,10 +177,6 @@ export default class BCBAController {
         .where('status', 'submitted')
         .preload('client')
         .preload('rbt')
-        .preload('behaviorData', (behaviorQuery) => {
-          behaviorQuery.preload('goal')
-        })
-        .preload('incidents')
         .orderBy('created_at', 'asc')
         .paginate(page, limit)
 
@@ -197,20 +194,6 @@ export default class BCBAController {
           totalHours: session.totalHours,
           location: session.location,
           sessionNotes: session.sessionNotes,
-          behaviorData: session.behaviorData.map(data => ({
-            id: data.id,
-            goalId: data.goalId,
-            goalTitle: data.goal.title,
-            summary: data.summary,
-          })),
-          incidents: session.incidents.map(incident => ({
-            id: incident.id,
-            type: incident.type,
-            severity: incident.severity,
-            description: incident.description,
-            actionTaken: incident.actionTaken,
-            timestamp: incident.timestamp.toISO(),
-          })),
           status: session.status,
           createdAt: session.createdAt.toISO(),
         })),
@@ -241,7 +224,7 @@ export default class BCBAController {
 
       session.bcbaApproved = approved
       session.bcbaApprovedBy = user.id
-      session.bcbaApprovedAt = new Date()
+      session.bcbaApprovedAt = DateTime.now()
       session.bcbaNotes = notes
       session.status = approved ? 'bcba_approved' : 'rejected'
 
