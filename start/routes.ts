@@ -73,12 +73,14 @@ router.group(() => {
     // Parent routes
     router.group(() => {
       router.get('/dashboard', [ParentController, 'dashboard'])
+      router.post('/children', [ParentController, 'addChild'])
       router.get('/messages', [ParentController, 'getMessages'])
       router.post('/messages', [ParentController, 'sendMessage'])
       router.put('/messages/:id/read', [ParentController, 'markMessageAsRead'])
       router.get('/clients/:clientId/schedule', [ParentController, 'getSchedule'])
       router.get('/clients/:clientId/progress-reports', [ParentController, 'getProgressReports'])
       router.get('/clients/:clientId/documents', [ParentController, 'getDocuments'])
+      router.post('/documents', [ParentController, 'uploadDocument'])
     }).prefix('/parent').use(middleware.role({ roles: ['PARENT'] }))
 
     // BCBA routes
