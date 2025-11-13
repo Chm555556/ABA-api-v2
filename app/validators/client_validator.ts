@@ -19,8 +19,18 @@ export const createClientValidator = vine.compile(
     phone: vine.string().optional(),
     email: vine.string().email().optional(),
     insuranceType: vine.enum(['insurance', 'private', 'regional']),
+    insuranceId: vine.string().optional(),
     assignedBcba: vine.number().optional(),
     diagnosis: vine.array(vine.string()).optional(),
+    // Make address fields optional for now
+    street: vine.string().optional(),
+    city: vine.string().optional(),
+    state: vine.string().optional(),
+    zipCode: vine.string().optional(),
+    emergencyContactName: vine.string().optional(),
+    emergencyContactRelationship: vine.string().optional(),
+    emergencyContactPhone: vine.string().optional(),
+    insurancePolicyNumber: vine.string().optional(),
   })
 )
 
@@ -29,7 +39,7 @@ export const createScheduleValidator = vine.compile(
     clientId: vine.number(),
     rbtId: vine.number(),
     bcbaId: vine.number(),
-    date: vine.date({ formats: ['YYYY-MM-DD'] }),
+    date: vine.string(), // Accept as string, we'll parse it in the controller
     startTime: vine.string(),
     endTime: vine.string(),
     location: vine.string().optional(),
