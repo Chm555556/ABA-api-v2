@@ -1,4 +1,5 @@
 import type { HttpContext } from '@adonisjs/core/http'
+import { DateTime } from 'luxon'
 import Client from '#models/client'
 import SessionLog from '#models/session_log'
 import Schedule from '#models/schedule'
@@ -13,6 +14,7 @@ export default class ParentController {
   async dashboard({ auth, response }: HttpContext) {
     try {
       const user = auth.user!
+      console.log('🔵 Parent dashboard called for user:', user.id, user.email, user.role)
 
       // Find children associated with this parent (assuming parent email matches client email or similar logic)
       const children = await Client.query()
@@ -25,16 +27,22 @@ export default class ParentController {
         .preload('assignedRbts')
         .preload('bcba')
 
-      // Get upcoming appointments
-      const upcomingAppointments = await Schedule.query()
-        .whereIn('client_id', children.map(child => child.id))
-        .where('date', '>=', new Date())
-        .where('status', 'scheduled')
-        .preload('client')
-        .preload('rbt')
-        .orderBy('date', 'asc')
-        .orderBy('start_time', 'asc')
-        .limit(10)
+      console.log('🔵 Found children:', children.length)
+
+      // Get upcoming appointments (only if children exist)
+      const upcomingAppointments = children.length > 0 
+        ? await Schedule.query()
+            .whereIn('client_id', children.map(child => child.id))
+            .where('date', '>=', new Date())
+            .where('status', 'scheduled')
+            .preload('client')
+            .preload('rbt')
+            .orderBy('date', 'asc')
+            .orderBy('start_time', 'asc')
+            .limit(10)
+        : []
+
+      console.log('🔵 Found appointments:', upcomingAppointments.length)
 
       // Get unread messages
       const unreadMessages = await Message.query()
@@ -44,22 +52,32 @@ export default class ParentController {
         .orderBy('created_at', 'desc')
         .limit(10)
 
-      // Get recent sessions for children
-      const recentSessions = await SessionLog.query()
-        .whereIn('client_id', children.map(child => child.id))
-        .where('status', 'approved')
-        .preload('client')
-        .preload('rbt')
-        .orderBy('date', 'desc')
-        .limit(10)
+      console.log('🔵 Found unread messages:', unreadMessages.length)
+
+      // Get recent sessions for children (only if children exist)
+      const recentSessions = children.length > 0
+        ? await SessionLog.query()
+            .whereIn('client_id', children.map(child => child.id))
+            .where('status', 'approved')
+            .preload('client')
+            .preload('rbt')
+            .orderBy('date', 'desc')
+            .limit(10)
+        : []
+
+      console.log('🔵 Found recent sessions:', recentSessions.length)
 
       // Calculate summary statistics
-      const totalSessions = await SessionLog.query()
-        .whereIn('client_id', children.map(child => child.id))
-        .where('status', 'approved')
-        .count('* as total')
+      const totalSessionsResult = children.length > 0
+        ? await SessionLog.query()
+            .whereIn('client_id', children.map(child => child.id))
+            .where('status', 'approved')
+            .count('* as total')
+        : [{ $extras: { total: 0 } }]
 
-      return response.json({
+      const totalSessions = totalSessionsResult[0].$extras.total
+
+      const dashboardData = {
         children: children.map(child => ({
           id: child.id,
           fullName: child.fullName,
@@ -75,7 +93,7 @@ export default class ParentController {
           id: appointment.id,
           clientName: appointment.client.fullName,
           therapistName: appointment.rbt.name,
-          date: appointment.date.toISODate(),
+          date: appointment.date?.toISODate() || null,
           time: appointment.time,
           location: appointment.location,
           status: appointment.status,
@@ -90,12 +108,17 @@ export default class ParentController {
         })),
         summary: {
           totalChildren: children.length,
-          totalSessions: totalSessions[0].$extras.total,
+          totalSessions: totalSessions,
           upcomingAppointments: upcomingAppointments.length,
           unreadMessages: unreadMessages.length,
         },
-      })
+      }
+
+      console.log('✅ Parent dashboard data prepared successfully')
+      return response.json(dashboardData)
     } catch (error) {
+      console.error('❌ Parent dashboard error:', error)
+      console.error('❌ Error stack:', error.stack)
       return response.status(500).json({
         message: 'Failed to fetch parent dashboard',
         error: error.message,
@@ -184,9 +207,6 @@ export default class ParentController {
       const reports = await ProgressReport.query()
         .where('client_id', child.id)
         .preload('generator')
-        .preload('goals', (goalsQuery) => {
-          goalsQuery.preload('goal')
-        })
         .orderBy('created_at', 'desc')
 
       return response.json({
@@ -197,14 +217,7 @@ export default class ParentController {
           reportPeriod: report.reportPeriod,
           overallSummary: report.overallSummary,
           recommendations: report.recommendations,
-          goals: report.goals.map(goalProgress => ({
-            goalId: goalProgress.goalId,
-            goalTitle: goalProgress.goal.title,
-            currentLevel: goalProgress.currentLevel,
-            targetLevel: goalProgress.targetLevel,
-            progress: goalProgress.progress,
-            notes: goalProgress.notes,
-          })),
+          goals: [], // TODO: Implement goals relationship
           graphData: report.graphData,
           createdAt: report.createdAt.toISO(),
         })),
@@ -383,6 +396,195 @@ export default class ParentController {
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch documents',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Upload a document for a child
+   */
+  async uploadDocument({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      console.log('🔵 Upload document called by user:', user.id, user.email, user.role)
+      
+      const {
+        clientId,
+        name,
+        type,
+        description,
+        fileContent,
+        fileType,
+      } = request.only(['clientId', 'name', 'type', 'description', 'fileContent', 'fileType'])
+
+      console.log('🔵 Upload request data:', { clientId, name, type, fileType, hasFileContent: !!fileContent })
+
+      // Validate required fields
+      if (!clientId) {
+        return response.status(400).json({
+          message: 'Client ID is required',
+          error: 'Missing clientId field',
+        })
+      }
+
+      if (!name) {
+        return response.status(400).json({
+          message: 'Document name is required',
+          error: 'Missing name field',
+        })
+      }
+
+      if (!type) {
+        return response.status(400).json({
+          message: 'Document type is required',
+          error: 'Missing type field',
+        })
+      }
+
+      if (!fileContent) {
+        return response.status(400).json({
+          message: 'File content is required',
+          error: 'Missing fileContent field',
+        })
+      }
+
+      // Verify parent has access to this child
+      const child = await Client.query()
+        .where('id', clientId)
+        .where((builder) => {
+          builder
+            .where('email', user.email)
+            .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
+        })
+        .first()
+
+      if (!child) {
+        console.log('❌ Parent does not have access to client:', clientId)
+        return response.status(403).json({
+          message: 'You do not have access to this child',
+          error: 'Access denied',
+        })
+      }
+
+      console.log('✅ Parent has access to child:', child.id, child.fullName)
+
+      // Create the document record
+      const document = await ClientDocument.create({
+        clientId: child.id,
+        name,
+        type,
+        url: fileContent || '', // Store base64 content as URL for now
+        uploadedBy: user.id,
+        uploadedAt: DateTime.now(),
+      })
+
+      await document.load('uploader')
+
+      console.log('✅ Document created successfully:', document.id)
+
+      return response.status(201).json({
+        message: 'Document uploaded successfully',
+        data: {
+          id: document.id,
+          clientId: document.clientId,
+          clientName: child.fullName,
+          name: document.name,
+          type: document.type,
+          url: document.url,
+          uploadedBy: document.uploader.name,
+          uploadedAt: document.uploadedAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error uploading document:', error)
+      console.error('❌ Error stack:', error.stack)
+      return response.status(400).json({
+        message: 'Failed to upload document',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Add a new child (client) for the parent
+   */
+  async addChild({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      
+      const {
+        firstName,
+        lastName,
+        dateOfBirth,
+        diagnosis,
+        insuranceType,
+        insuranceId,
+        emergencyContactName,
+        emergencyContactPhone,
+        emergencyContactRelationship,
+      } = request.only([
+        'firstName',
+        'lastName',
+        'dateOfBirth',
+        'diagnosis',
+        'insuranceType',
+        'insuranceId',
+        'emergencyContactName',
+        'emergencyContactPhone',
+        'emergencyContactRelationship',
+      ])
+
+      // Map frontend insurance type to backend enum
+      let mappedInsuranceType: 'insurance' | 'private' | 'regional' = 'private'
+      if (insuranceType === 'Medicaid' || insuranceType === 'Medicare') {
+        mappedInsuranceType = 'insurance'
+      } else if (insuranceType === 'Private' || insuranceType === 'Self-Pay') {
+        mappedInsuranceType = 'private'
+      } else if (insuranceType === 'Regional') {
+        mappedInsuranceType = 'regional'
+      }
+
+      // Create the child/client
+      const child = await Client.create({
+        firstName,
+        lastName,
+        dateOfBirth,
+        email: user.email, // Link to parent's email
+        phone: emergencyContactPhone || '0000000000',
+        street: '',
+        city: '',
+        state: '',
+        zipCode: '',
+        diagnosis: diagnosis ? [diagnosis] : [],
+        insuranceType: mappedInsuranceType,
+        insuranceId: insuranceId || 'PENDING',
+        clinicId: 1, // Default clinic - you may want to make this dynamic
+        assignedBcba: null,
+        admissionDate: DateTime.now(),
+        emergencyContactName: emergencyContactName || user.name,
+        emergencyContactPhone: emergencyContactPhone || '',
+        emergencyContactRelationship: emergencyContactRelationship || 'Parent',
+        status: 'active',
+      })
+
+      console.log('✅ Child added successfully:', child.id, child.fullName)
+
+      return response.status(201).json({
+        message: 'Child added successfully',
+        data: {
+          id: child.id,
+          fullName: child.fullName,
+          firstName: child.firstName,
+          lastName: child.lastName,
+          age: child.age,
+          status: child.status,
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error adding child:', error)
+      return response.status(400).json({
+        message: 'Failed to add child',
         error: error.message,
       })
     }

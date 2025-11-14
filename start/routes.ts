@@ -73,12 +73,14 @@ router.group(() => {
     // Parent routes
     router.group(() => {
       router.get('/dashboard', [ParentController, 'dashboard'])
+      router.post('/children', [ParentController, 'addChild'])
       router.get('/messages', [ParentController, 'getMessages'])
       router.post('/messages', [ParentController, 'sendMessage'])
       router.put('/messages/:id/read', [ParentController, 'markMessageAsRead'])
       router.get('/clients/:clientId/schedule', [ParentController, 'getSchedule'])
       router.get('/clients/:clientId/progress-reports', [ParentController, 'getProgressReports'])
       router.get('/clients/:clientId/documents', [ParentController, 'getDocuments'])
+      router.post('/documents', [ParentController, 'uploadDocument'])
     }).prefix('/parent').use(middleware.role({ roles: ['PARENT'] }))
 
     // BCBA routes
@@ -89,6 +91,8 @@ router.group(() => {
       router.put('/sessions/:id/review', [BCBAController, 'reviewSession'])
       router.get('/treatment-goals', [BCBAController, 'getTreatmentGoals'])
       router.post('/treatment-goals', [BCBAController, 'createTreatmentGoal'])
+      router.get('/progress-reports', [BCBAController, 'getProgressReports'])
+      router.get('/progress-reports/:id', [BCBAController, 'getProgressReport'])
       router.post('/progress-reports', [BCBAController, 'generateProgressReport'])
       router.get('/supervision', [BCBAController, 'getSupervisionSchedule'])
       router.post('/supervision', [BCBAController, 'createSupervisionSession'])

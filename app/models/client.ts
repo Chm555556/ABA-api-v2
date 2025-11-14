@@ -73,10 +73,18 @@ export default class Client extends BaseModel {
   declare dischargeDate: DateTime | null
 
   @column({
-    prepare: (value: string[]) => JSON.stringify(value),
-    consume: (value: string) => JSON.parse(value || '[]'),
+    prepare: (value: string[] | null) => value ? JSON.stringify(value) : null,
+    consume: (value: string | null) => {
+      if (!value) return []
+      try {
+        return JSON.parse(value)
+      } catch (error) {
+        // If it's not valid JSON, treat it as a single diagnosis string
+        return [value]
+      }
+    },
   })
-  declare diagnosis: string[]
+  declare diagnosis: string[] | null
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime

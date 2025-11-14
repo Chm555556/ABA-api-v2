@@ -26,6 +26,16 @@ export default class ClinicController {
       const user = auth.user!
       console.log('Dashboard called for user:', user.id, 'clinic:', user.clinicId)
 
+      // Check if user has a clinic assigned
+      if (!user.clinicId) {
+        console.error('User does not have a clinic assigned:', user.id, user.email)
+        return response.status(400).json({
+          success: false,
+          message: 'Your account is not associated with a clinic. Please contact your administrator to assign you to a clinic.',
+          error: 'CLINIC_NOT_ASSIGNED',
+        })
+      }
+
       // Get total clients for this clinic
       const totalClientsResult = await db.rawQuery(
         'SELECT COUNT(*) as total FROM clients WHERE clinic_id = ? AND status = ?',
@@ -130,13 +140,27 @@ export default class ClinicController {
   async getClients({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
+      console.log('getClients called by user:', user.id, 'clinic:', user.clinicId)
+      
+      // Check if user has a clinic assigned
+      if (!user.clinicId) {
+        console.error('User has no clinic_id:', user.id)
+        return response.status(400).json({
+          success: false,
+          message: 'Your account is not associated with a clinic.',
+          error: 'CLINIC_NOT_ASSIGNED',
+        })
+      }
+
       const page = request.input('page', 1)
       const limit = request.input('limit', 10)
       const status = request.input('status')
       const search = request.input('search')
 
+      console.log('Querying clients for clinic:', user.clinicId)
+
       let query = Client.query()
-        .where('clinic_id', user.clinicId!)
+        .where('clinic_id', user.clinicId)
         .preload('bcba')
         .preload('assignedRbts')
 
@@ -156,6 +180,8 @@ export default class ClinicController {
         .orderBy('first_name', 'asc')
         .paginate(page, limit)
 
+      console.log('Found', clients.all().length, 'clients')
+
       return response.json({
         data: clients.all().map(client => ({
           id: client.id,
@@ -163,21 +189,24 @@ export default class ClinicController {
           firstName: client.firstName,
           lastName: client.lastName,
           age: client.age,
-          dateOfBirth: client.dateOfBirth.toISODate(),
+          dateOfBirth: client.dateOfBirth?.toISODate() || null,
           status: client.status,
           insuranceType: client.insuranceType,
           insuranceId: client.insuranceId,
           bcbaName: client.bcba?.name || 'Not assigned',
           assignedRbts: client.assignedRbts.map(rbt => rbt.name),
-          admissionDate: client.admissionDate.toISODate(),
+          admissionDate: client.admissionDate?.toISODate() || null,
           createdAt: client.createdAt.toISO(),
         })),
         meta: clients.getMeta(),
       })
     } catch (error) {
+      console.error('getClients error:', error)
+      console.error('Error stack:', error.stack)
       return response.status(500).json({
         message: 'Failed to fetch clients',
         error: error.message,
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
       })
     }
   }
@@ -361,45 +390,113 @@ export default class ClinicController {
 async createClient({ auth, request, response }: HttpContext) {
   try {
     const user = auth.user!
-    const clientData = await validateWithNormalizer(request, createClientValidator)
+    
+    console.log('🔵 createClient called by user:', user.id, 'clinic:', user.clinicId)
+    console.log('🔵 Request body:', JSON.stringify(request.all(), null, 2))
+    
+    // Check if user has a clinic assigned
+    if (!user.clinicId) {
+      console.error('❌ User does not have a clinic assigned:', user.id, user.email)
+      return response.status(400).json({
+        success: false,
+        message: 'Your account is not associated with a clinic. Please contact your administrator.',
+        error: 'CLINIC_NOT_ASSIGNED',
+      })
+    }
+
+    let clientData
+    try {
+      clientData = await validateWithNormalizer(request, createClientValidator)
+      console.log('🔵 Validated client data:', JSON.stringify(clientData, null, 2))
+    } catch (validationError) {
+      console.error('❌ Validation error:', validationError)
+      console.error('❌ Validation messages:', validationError.messages)
+      return response.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        error: validationError.messages || validationError.message,
+        details: validationError.messages,
+      })
+    }
 
     // Handle both string and Date values safely
     let parsedDate: DateTime
 
-    if (clientData.dateOfBirth instanceof Date) {
-      parsedDate = DateTime.fromJSDate(clientData.dateOfBirth)
-    } else {
-      parsedDate = DateTime.fromISO(String(clientData.dateOfBirth))
-    }
+    try {
+      if (clientData.dateOfBirth instanceof Date) {
+        parsedDate = DateTime.fromJSDate(clientData.dateOfBirth)
+      } else {
+        parsedDate = DateTime.fromISO(String(clientData.dateOfBirth))
+      }
 
-    if (!parsedDate.isValid) {
+      if (!parsedDate.isValid) {
+        throw new Error(`Invalid date: ${clientData.dateOfBirth}`)
+      }
+      console.log('🔵 Parsed date of birth:', parsedDate.toISODate())
+    } catch (dateError) {
+      console.error('❌ Date parsing error:', dateError)
       return response.status(400).json({
         success: false,
         message: 'Invalid date format. Expected YYYY-MM-DD',
+        error: 'INVALID_DATE',
       })
     }
 
-    const client = await Client.create({
-      ...clientData,
-      dateOfBirth: parsedDate,   // ✅ always a valid Luxon DateTime
-      clinicId: user.clinicId!,
-      status: 'active',
-      admissionDate: DateTime.now(),
-    })
+    console.log('🔵 Creating client with clinicId:', user.clinicId)
 
-    await client.load('bcba')
+    try {
+      const client = await Client.create({
+        firstName: clientData.firstName,
+        lastName: clientData.lastName,
+        dateOfBirth: parsedDate,
+        clinicId: user.clinicId,
+        status: 'active',
+        admissionDate: DateTime.now(),
+        // Required fields with defaults
+        street: clientData.street || 'Not provided',
+        city: clientData.city || 'Not provided',
+        state: clientData.state || 'Not provided',
+        zipCode: clientData.zipCode || '00000',
+        phone: clientData.phone || 'Not provided',
+        emergencyContactName: clientData.emergencyContactName || 'Not provided',
+        emergencyContactRelationship: clientData.emergencyContactRelationship || 'Not provided',
+        emergencyContactPhone: clientData.emergencyContactPhone || 'Not provided',
+        insuranceType: clientData.insuranceType,
+        insuranceId: clientData.insuranceId || 'Not provided',
+        // Optional fields
+        email: clientData.email || null,
+        assignedBcba: clientData.assignedBcba || null,
+        diagnosis: clientData.diagnosis || null,
+      })
 
-    return response.status(201).json({
-      success: true,
-      message: 'Client created successfully',
-      data: client.serialize(),
-    })
+      console.log('🔵 Client created successfully:', client.id)
+
+      await client.load('bcba')
+
+      return response.status(201).json({
+        success: true,
+        message: 'Client created successfully',
+        data: client.serialize(),
+      })
+    } catch (createError) {
+      console.error('❌ Client creation error:', createError)
+      console.error('❌ Error message:', createError.message)
+      console.error('❌ Error code:', createError.code)
+      throw createError // Re-throw to be caught by outer catch
+    }
   } catch (error) {
-    console.error('createClient error:', error)
+    console.error('❌ createClient error:', error)
+    console.error('❌ Error details:', {
+      message: error.message,
+      messages: error.messages,
+      stack: error.stack,
+    })
+    
     return response.status(400).json({
       success: false,
       message: 'Failed to create client',
       error: error.messages || error.message,
+      details: process.env.NODE_ENV === 'development' ? error.messages : undefined,
     })
   }
 }
@@ -483,7 +580,7 @@ async createClient({ auth, request, response }: HttpContext) {
           rbtName: session.rbt.name,
           bcbaId: session.bcbaId,
           bcbaName: session.bcba.name,
-          date: session.date.toISODate(),
+          date: session.date?.toISODate() || null,
           startTime: session.startTime,
           endTime: session.endTime,
           duration: session.duration,
@@ -592,7 +689,7 @@ async createClient({ auth, request, response }: HttpContext) {
           rbtId: schedule.rbtId,
           rbtName: schedule.rbt.name,
           bcbaName: schedule.bcba.name,
-          date: schedule.date.toISODate(),
+          date: schedule.date?.toISODate() || null,
           startTime: schedule.startTime,
           endTime: schedule.endTime,
           location: schedule.location,
@@ -652,7 +749,7 @@ async createClient({ auth, request, response }: HttpContext) {
           rbtName: schedule.rbt.name,
           bcbaId: schedule.bcbaId,
           bcbaName: schedule.bcba.name,
-          date: schedule.date.toISODate(),
+          date: schedule.date?.toISODate() || null,
           startTime: schedule.startTime,
           endTime: schedule.endTime,
           location: schedule.location,
@@ -808,18 +905,82 @@ async createClient({ auth, request, response }: HttpContext) {
 async createSchedule({ auth, request, response }: HttpContext) {
   try {
     const user = auth.user!
-    const payload = await validateWithNormalizer(request, createScheduleValidator)
+    
+    console.log('🔵 createSchedule called by user:', user.id, 'clinic:', user.clinicId)
+    console.log('🔵 Request body:', JSON.stringify(request.all(), null, 2))
+    
+    // Check if user has a clinic assigned
+    if (!user.clinicId) {
+      console.error('❌ User has no clinic_id')
+      return response.status(400).json({
+        success: false,
+        message: 'Your account is not associated with a clinic.',
+        error: 'CLINIC_NOT_ASSIGNED',
+      })
+    }
 
+    let payload
+    try {
+      payload = await validateWithNormalizer(request, createScheduleValidator)
+      console.log('🔵 Validated payload:', JSON.stringify(payload, null, 2))
+    } catch (validationError) {
+      console.error('❌ Validation error:', validationError)
+      console.error('❌ Validation messages:', validationError.messages)
+      return response.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        error: validationError.messages || validationError.message,
+      })
+    }
+
+    // Verify client exists and belongs to this clinic
     const client = await Client.query()
       .where('id', payload.clientId)
-      .where('clinic_id', user.clinicId!)
-      .firstOrFail()
+      .where('clinic_id', user.clinicId)
+      .first()
 
+    if (!client) {
+      console.error('❌ Client not found or does not belong to clinic')
+      return response.status(400).json({
+        success: false,
+        message: 'Client not found or does not belong to your clinic',
+        error: 'CLIENT_NOT_FOUND',
+      })
+    }
+
+    console.log('🔵 Client found:', client.id, client.fullName)
+
+    // Parse date carefully
+    let parsedDate: DateTime
+    try {
+      parsedDate = DateTime.fromISO(payload.date)
+      if (!parsedDate.isValid) {
+        throw new Error('Invalid date format')
+      }
+      console.log('🔵 Parsed date:', parsedDate.toISODate())
+    } catch (dateError) {
+      console.error('❌ Date parsing error:', dateError)
+      return response.status(400).json({
+        success: false,
+        message: 'Invalid date format. Expected YYYY-MM-DD',
+        error: 'INVALID_DATE',
+      })
+    }
+
+    // Create schedule
     const schedule = await Schedule.create({
-      ...payload,
-      date: DateTime.fromISO(payload.date), // ✅ Luxon DateTime
+      clientId: payload.clientId,
+      rbtId: payload.rbtId,
+      bcbaId: payload.bcbaId,
+      date: parsedDate,
+      startTime: payload.startTime,
+      endTime: payload.endTime,
+      location: payload.location || 'clinic',
+      notes: payload.notes || null,
       status: 'scheduled',
     })
+
+    console.log('🔵 Schedule created:', schedule.id)
 
     await schedule.load('client')
     await schedule.load('rbt')
@@ -831,11 +992,18 @@ async createSchedule({ auth, request, response }: HttpContext) {
       data: schedule.serialize(),
     })
   } catch (error) {
-    console.error('createSchedule error:', error)
+    console.error('❌ createSchedule error:', error)
+    console.error('❌ Error details:', {
+      message: error.message,
+      messages: error.messages,
+      stack: error.stack,
+    })
+    
     return response.status(400).json({
       success: false,
       message: 'Failed to create schedule',
       error: error.messages || error.message,
+      details: process.env.NODE_ENV === 'development' ? error.messages : undefined,
     })
   }
 }
@@ -888,7 +1056,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
 
         acc[clientId].sessions.push({
           id: session.id,
-          date: session.date.toISODate(),
+          date: session.date?.toISODate() || null,
           duration: session.duration,
           totalHours: session.totalHours,
           cptCode: session.cptCode,
@@ -1046,7 +1214,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
             role: member.role,
             status: member.isActive ? 'active' : 'inactive',
             hourlyRate: member.hourlyRate,
-            hireDate: member.createdAt.toISODate(),
+            hireDate: member.createdAt?.toISODate() || null,
             supervisorId: member.supervisorId,
             clinicId: member.clinicId,
             permissions: member.permissions || [],
@@ -1057,7 +1225,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
               approvalRate,
               avgSessionDuration,
               clientCount,
-              lastActive: sessions.length > 0 ? sessions[0].date.toISODate() : member.updatedAt?.toISODate() || member.createdAt.toISODate(),
+              lastActive: sessions.length > 0 ? sessions[0].date?.toISODate() || null : member.updatedAt?.toISODate() || member.createdAt?.toISODate() || null,
             },
           }
         })
@@ -1083,9 +1251,18 @@ async createSchedule({ auth, request, response }: HttpContext) {
       const user = auth.user!
       console.log('Getting all staff for clinic:', user.clinicId)
 
+      // Check if user has a clinic assigned
+      if (!user.clinicId) {
+        return response.status(400).json({
+          success: false,
+          message: 'Your account is not associated with a clinic.',
+          error: 'CLINIC_NOT_ASSIGNED',
+        })
+      }
+
       // Get all staff members for this clinic
       const staff = await User.query()
-        .where('clinic_id', user.clinicId!)
+        .where('clinic_id', user.clinicId)
         .whereIn('role', ['RBT', 'BCBA', 'CLINIC', 'ADMIN'])
         .orderBy('name', 'asc')
 
@@ -1122,6 +1299,16 @@ async createSchedule({ auth, request, response }: HttpContext) {
   async createStaff({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
+      
+      // Check if user has a clinic assigned
+      if (!user.clinicId) {
+        return response.status(400).json({
+          success: false,
+          message: 'Your account is not associated with a clinic.',
+          error: 'CLINIC_NOT_ASSIGNED',
+        })
+      }
+
       const staffData = request.only([
         'name',
         'email',
@@ -1142,7 +1329,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
         email: staffData.email,
         password: defaultPassword, // Should be changed on first login
         role: staffData.role,
-        clinicId: user.clinicId!,
+        clinicId: user.clinicId,
         phone: staffData.phone || null,
         hourlyRate: staffData.hourlyRate || null,
         isActive: staffData.isActive !== undefined ? staffData.isActive : true,
@@ -1307,11 +1494,11 @@ async createSchedule({ auth, request, response }: HttpContext) {
             id: client.id,
             firstName: client.firstName,
             lastName: client.lastName,
-            dateOfBirth: client.dateOfBirth.toISODate(),
+            dateOfBirth: client.dateOfBirth?.toISODate() || null,
             age: client.age,
             diagnosis: Array.isArray(client.diagnosis) ? client.diagnosis : [client.diagnosis].filter(Boolean),
             status: client.status,
-            admissionDate: client.admissionDate.toISODate(),
+            admissionDate: client.admissionDate?.toISODate() || null,
             assignedBCBA: client.assignedBcba?.toString() || '',
             bcbaName: client.bcba?.name || 'Not assigned',
             insuranceType: client.insuranceType,
@@ -1342,7 +1529,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
             })),
             sessions: sessions.map(session => ({
               id: session.id,
-              date: session.date.toISODate(),
+              date: session.date?.toISODate() || null,
               duration: session.duration,
               rbtName: session.rbt?.name || 'Unknown',
               status: session.status,

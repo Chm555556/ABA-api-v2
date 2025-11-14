@@ -27,10 +27,10 @@ export default class Schedule extends BaseModel {
   declare endTime: string
 
   @column()
-  declare location: 'clinic' | 'home' | 'school' | 'community'
+  declare location: string
 
   @column()
-  declare status: 'scheduled' | 'completed' | 'cancelled' | 'no_show'
+  declare status: string
 
   @column()
   declare notes: string | null

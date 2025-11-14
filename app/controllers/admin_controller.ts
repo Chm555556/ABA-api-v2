@@ -1422,6 +1422,11 @@ export default class AdminController {
         'status',
       ])
 
+      // Convert dateOfBirth string to DateTime
+      if (payload.dateOfBirth) {
+        payload.dateOfBirth = DateTime.fromISO(payload.dateOfBirth)
+      }
+
       const defaults = {
         street: '',
         city: '',
@@ -1430,14 +1435,18 @@ export default class AdminController {
         emergencyContactName: '',
         emergencyContactRelationship: '',
         emergencyContactPhone: '',
-        admissionDate: new Date(),
+        admissionDate: DateTime.now(),
         dischargeDate: null,
         diagnosis: [],
       }
 
       const client = await Client.create({ ...defaults, ...payload })
       await client.load('clinic')
-      await client.load('bcba')
+      
+      // Only load bcba if assigned
+      if (client.assignedBcba) {
+        await client.load('bcba')
+      }
 
       return response.status(201).json({
         message: 'Client created successfully',
@@ -1478,7 +1487,7 @@ export default class AdminController {
    */
   async createSession({ request, response }: HttpContext) {
     try {
-      const payload = request.only([
+      const payload: any = request.only([
         'clientId',
         'rbtId',
         'bcbaId',
