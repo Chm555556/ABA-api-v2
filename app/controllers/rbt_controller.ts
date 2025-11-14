@@ -54,11 +54,6 @@ export default class RBTController {
         .where('rbt_id', user.id)
         .where('date', today)
         .preload('client')
-        .preload('client', (clientQuery) => {
-          clientQuery.preload('treatmentGoals', (goalsQuery) => {
-            goalsQuery.where('status', 'active').limit(3)
-          })
-        })
         .orderBy('start_time', 'asc')
 
       // Get recent sessions
@@ -75,16 +70,16 @@ export default class RBTController {
         hoursWorked: Math.round(hoursWorked * 10) / 10,
         todaySchedule: todaySchedule.map(schedule => ({
           id: schedule.id,
-          clientName: schedule.client.fullName,
-          time: schedule.time,
-          duration: Math.round((new Date(`1970-01-01T${schedule.endTime}`) - new Date(`1970-01-01T${schedule.startTime}`)) / (1000 * 60)),
-          location: schedule.location,
+          clientName: schedule.client?.fullName || 'Unknown Client',
+          time: schedule.time || `${schedule.startTime} - ${schedule.endTime}`,
+          duration: schedule.duration || Math.round((new Date(`1970-01-01T${schedule.endTime}`) - new Date(`1970-01-01T${schedule.startTime}`)) / (1000 * 60)),
+          location: schedule.location || 'Not specified',
           status: schedule.status,
-          goals: schedule.client.treatmentGoals.map(goal => goal.title),
+          goals: [],
         })),
         recentSessions: recentSessions.map(session => ({
           id: session.id,
-          clientName: session.client.fullName,
+          clientName: session.client?.fullName || 'Unknown Client',
           date: session.date.toISODate(),
           duration: session.duration,
           status: session.status,
@@ -397,10 +392,6 @@ export default class RBTController {
       let query = SessionLog.query()
         .where('rbt_id', user.id)
         .preload('client')
-        .preload('behaviorData', (behaviorQuery) => {
-          behaviorQuery.preload('goal')
-        })
-        .preload('incidents')
 
       if (clientId) {
         query = query.where('client_id', clientId)
@@ -415,7 +406,7 @@ export default class RBTController {
         data: sessions.all().map(session => ({
           id: session.id,
           clientId: session.clientId,
-          clientName: session.client.fullName,
+          clientName: session.client?.fullName || 'Unknown Client',
           date: session.date.toISODate(),
           startTime: session.startTime,
           endTime: session.endTime,
@@ -425,17 +416,8 @@ export default class RBTController {
           sessionNotes: session.sessionNotes,
           status: session.status,
           bcbaApproved: session.bcbaApproved,
-          behaviorData: session.behaviorData.map(data => ({
-            id: data.id,
-            goalTitle: data.goal.title,
-            summary: data.summary,
-          })),
-          incidents: session.incidents.map(incident => ({
-            id: incident.id,
-            type: incident.type,
-            severity: incident.severity,
-            description: incident.description,
-          })),
+          behaviorData: [],
+          incidents: [],
           createdAt: session.createdAt.toISO(),
         })),
         meta: sessions.getMeta(),

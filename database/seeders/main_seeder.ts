@@ -251,11 +251,57 @@ export default class MainSeeder extends BaseSeeder {
       diagnosis: ['Autism Spectrum Disorder'],
     })
 
-    // Assign RBTs to clients
-    await client1.related('assignedRbts').attach([rbt1.id, rbt2.id])
-    await client2.related('assignedRbts').attach([rbt1.id])
-    await client3.related('assignedRbts').attach([rbt2.id, rbt3.id])
-    await client4.related('assignedRbts').attach([rbt3.id])
+    // Assign RBTs to clients with assigned_at timestamp
+    await client1.related('assignedRbts').attach({
+      [rbt1.id]: { 
+        assigned_at: DateTime.now().minus({ days: 30 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      },
+      [rbt2.id]: { 
+        assigned_at: DateTime.now().minus({ days: 25 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
+    await client2.related('assignedRbts').attach({
+      [rbt1.id]: { 
+        assigned_at: DateTime.now().minus({ days: 28 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
+    await client3.related('assignedRbts').attach({
+      [rbt2.id]: { 
+        assigned_at: DateTime.now().minus({ days: 27 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      },
+      [rbt3.id]: { 
+        assigned_at: DateTime.now().minus({ days: 20 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
+    await client4.related('assignedRbts').attach({
+      [rbt3.id]: { 
+        assigned_at: DateTime.now().minus({ days: 15 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
 
     // Create Ram and Shyam as children for parent portal testing
     const clientRam = await Client.create({
@@ -302,9 +348,25 @@ export default class MainSeeder extends BaseSeeder {
       diagnosis: ['Autism Spectrum Disorder', 'ADHD'],
     })
 
-    // Assign RBTs to Ram and Shyam
-    await clientRam.related('assignedRbts').attach([rbt1.id])
-    await clientShyam.related('assignedRbts').attach([rbt2.id])
+    // Assign RBTs to Ram and Shyam with assigned_at timestamp
+    await clientRam.related('assignedRbts').attach({
+      [rbt1.id]: { 
+        assigned_at: DateTime.now().minus({ days: 35 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
+    await clientShyam.related('assignedRbts').attach({
+      [rbt2.id]: { 
+        assigned_at: DateTime.now().minus({ days: 32 }), 
+        unassigned_at: null,
+        is_active: true, 
+        created_at: DateTime.now(), 
+        updated_at: DateTime.now() 
+      }
+    })
 
     // Create treatment goals
     const goal1 = await TreatmentGoal.create({
@@ -336,6 +398,62 @@ export default class MainSeeder extends BaseSeeder {
       targetBehavior: 'Instruction following',
       measurementType: 'percentage',
       masteryCriteria: '85% compliance across 3 consecutive sessions',
+      status: 'active',
+      createdBy: bcba.id,
+    })
+
+    // Additional goals for client3 and client4
+    await TreatmentGoal.create({
+      clientId: client3.id,
+      title: 'Increase Verbal Requests',
+      description: 'Client will verbally request preferred items using 2-word phrases',
+      targetBehavior: 'Verbal communication',
+      measurementType: 'frequency',
+      masteryCriteria: '10 independent requests per session across 3 sessions',
+      status: 'active',
+      createdBy: bcba2.id,
+    })
+
+    await TreatmentGoal.create({
+      clientId: client3.id,
+      title: 'Reduce Aggressive Behavior',
+      description: 'Client will use replacement behaviors instead of aggression',
+      targetBehavior: 'Behavior reduction',
+      measurementType: 'frequency',
+      masteryCriteria: 'Less than 2 instances per session for 2 weeks',
+      status: 'active',
+      createdBy: bcba2.id,
+    })
+
+    await TreatmentGoal.create({
+      clientId: client4.id,
+      title: 'Improve Social Interaction',
+      description: 'Client will initiate play with peers',
+      targetBehavior: 'Social skills',
+      measurementType: 'frequency',
+      masteryCriteria: '5 initiations per session across 3 sessions',
+      status: 'active',
+      createdBy: bcba2.id,
+    })
+
+    await TreatmentGoal.create({
+      clientId: clientRam.id,
+      title: 'Complete Academic Tasks',
+      description: 'Client will complete assigned academic tasks independently',
+      targetBehavior: 'Task completion',
+      measurementType: 'percentage',
+      masteryCriteria: '90% task completion across 5 sessions',
+      status: 'active',
+      createdBy: bcba.id,
+    })
+
+    await TreatmentGoal.create({
+      clientId: clientShyam.id,
+      title: 'Improve Attention Span',
+      description: 'Client will maintain attention to task for 10 minutes',
+      targetBehavior: 'Sustained attention',
+      measurementType: 'duration',
+      masteryCriteria: '10 minutes sustained attention across 3 sessions',
       status: 'active',
       createdBy: bcba.id,
     })
