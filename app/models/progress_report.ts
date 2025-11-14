@@ -28,8 +28,32 @@ export default class ProgressReport extends BaseModel {
   declare recommendations: string
 
   @column({
-    prepare: (value: any) => JSON.stringify(value),
-    consume: (value: string) => JSON.parse(value || '[]'),
+    prepare: (value: any) => JSON.stringify(value || []),
+    consume: (value: any) => {
+      // Handle null, undefined, or empty string
+      if (value === null || value === undefined || value === '') {
+        return []
+      }
+      
+      // If it's already an array, return it
+      if (Array.isArray(value)) {
+        return value
+      }
+      
+      // If it's a string, try to parse it
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value)
+          return Array.isArray(parsed) ? parsed : []
+        } catch (error) {
+          console.error('Error parsing graphData:', value, error)
+          return []
+        }
+      }
+      
+      // Default to empty array
+      return []
+    },
   })
   declare graphData: any[]
 

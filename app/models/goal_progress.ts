@@ -5,6 +5,8 @@ import ProgressReport from './progress_report.js'
 import TreatmentGoal from './treatment_goal.js'
 
 export default class GoalProgress extends BaseModel {
+  static table = 'goal_progress'
+
   @column({ isPrimary: true })
   declare id: number
 
