@@ -1,4 +1,5 @@
 import type { HttpContext } from '@adonisjs/core/http'
+import { DateTime } from 'luxon'
 import Client from '#models/client'
 import SessionLog from '#models/session_log'
 import Schedule from '#models/schedule'
@@ -70,16 +71,16 @@ export default class RBTController {
         hoursWorked: Math.round(hoursWorked * 10) / 10,
         todaySchedule: todaySchedule.map(schedule => ({
           id: schedule.id,
-          clientName: schedule.client?.fullName || 'Unknown Client',
-          time: schedule.time || `${schedule.startTime} - ${schedule.endTime}`,
-          duration: schedule.duration || Math.round((new Date(`1970-01-01T${schedule.endTime}`) - new Date(`1970-01-01T${schedule.startTime}`)) / (1000 * 60)),
-          location: schedule.location || 'Not specified',
+          clientName: schedule.client ? `${schedule.client.firstName} ${schedule.client.lastName}` : 'Unknown Client',
+          time: `${schedule.startTime} - ${schedule.endTime}`,
+          duration: 60,
+          location: schedule.location,
           status: schedule.status,
           goals: [],
         })),
         recentSessions: recentSessions.map(session => ({
           id: session.id,
-          clientName: session.client?.fullName || 'Unknown Client',
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
           date: session.date.toISODate(),
           duration: session.duration,
           status: session.status,
@@ -115,7 +116,7 @@ export default class RBTController {
       return response.json({
         data: clients.map(client => ({
           id: client.id,
-          fullName: client.fullName,
+          fullName: `${client.firstName} ${client.lastName}`,
           firstName: client.firstName,
           lastName: client.lastName,
           age: client.age,
@@ -162,8 +163,8 @@ export default class RBTController {
         })
         .firstOrFail()
 
-      const now = new Date()
-      const startTime = now.toTimeString().split(' ')[0].substring(0, 5) // HH:MM format
+      const now = DateTime.now()
+      const startTime = now.toFormat('HH:mm')
 
       const session = await SessionLog.create({
         clientId: client.id,
@@ -217,13 +218,13 @@ export default class RBTController {
         .where('status', 'draft')
         .firstOrFail()
 
-      const now = new Date()
-      const endTime = now.toTimeString().split(' ')[0].substring(0, 5) // HH:MM format
+      const now = DateTime.now()
+      const endTime = now.toFormat('HH:mm')
 
-      // Calculate duration in minutes
-      const startDateTime = new Date(`1970-01-01T${session.startTime}`)
-      const endDateTime = new Date(`1970-01-01T${endTime}`)
-      const duration = Math.round((endDateTime - startDateTime) / (1000 * 60))
+      // Calculate duration in minutes (simple calculation)
+      const [startHour, startMin] = session.startTime.split(':').map(Number)
+      const [endHour, endMin] = endTime.split(':').map(Number)
+      const duration = (endHour * 60 + endMin) - (startHour * 60 + startMin)
       const totalHours = Math.round((duration / 60) * 100) / 100
 
       session.endTime = endTime
@@ -297,7 +298,7 @@ export default class RBTController {
           response: trialData.response,
           reinforcement: trialData.reinforcement,
           notes: trialData.notes,
-          timestamp: new Date(trialData.timestamp),
+          timestamp: DateTime.fromISO(trialData.timestamp),
         })
       }
 
@@ -356,7 +357,7 @@ export default class RBTController {
         severity,
         description,
         actionTaken,
-        timestamp: new Date(),
+        timestamp: DateTime.now(),
       })
 
       return response.status(201).json({
@@ -406,7 +407,7 @@ export default class RBTController {
         data: sessions.all().map(session => ({
           id: session.id,
           clientId: session.clientId,
-          clientName: session.client?.fullName || 'Unknown Client',
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
           date: session.date.toISODate(),
           startTime: session.startTime,
           endTime: session.endTime,
@@ -460,7 +461,7 @@ export default class RBTController {
         data: schedules.map(schedule => ({
           id: schedule.id,
           clientId: schedule.clientId,
-          clientName: schedule.client.fullName,
+          clientName: `${schedule.client.firstName} ${schedule.client.lastName}`,
           bcbaName: schedule.bcba.name,
           date: schedule.date.toISODate(),
           startTime: schedule.startTime,
