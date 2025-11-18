@@ -5,13 +5,14 @@ import Client from './client.js'
 import User from './user.js'
 import BehaviorData from './behavior_data.js'
 import Incident from './incident.js'
+import SessionParticipant from './session_participant.js'
 
 export default class SessionLog extends BaseModel {
   @column({ isPrimary: true })
   declare id: number
 
   @column()
-  declare clientId: number
+  declare clientId: number | null
 
   @column()
   declare rbtId: number
@@ -42,6 +43,9 @@ export default class SessionLog extends BaseModel {
 
   @column()
   declare location: 'clinic' | 'home' | 'school' | 'community'
+
+  @column()
+  declare sessionType: 'one_to_one' | 'group' | 'community'
 
   @column()
   declare sessionNotes: string | null
@@ -109,11 +113,20 @@ export default class SessionLog extends BaseModel {
   })
   declare clinicApprover: BelongsTo<typeof User>
 
-  @hasMany(() => BehaviorData)
+  @hasMany(() => BehaviorData, {
+    foreignKey: 'sessionId',
+  })
   declare behaviorData: HasMany<typeof BehaviorData>
 
-  @hasMany(() => Incident)
+  @hasMany(() => Incident, {
+    foreignKey: 'sessionId',
+  })
   declare incidents: HasMany<typeof Incident>
+
+  @hasMany(() => SessionParticipant, {
+    foreignKey: 'sessionLogId',
+  })
+  declare participants: HasMany<typeof SessionParticipant>
 
   // Computed properties
   get clientName() {

@@ -1363,21 +1363,6 @@ export default class AdminController {
   }
 
   /**
-   * 🏥 Get all clinics
-   */
-  async getClinics({ response }: HttpContext) {
-    try {
-      const clinics = await Clinic.query().orderBy('name', 'asc')
-      return response.json({ data: clinics })
-    } catch (error) {
-      return response.status(500).json({
-        message: 'Failed to fetch clinics',
-        error: error.message,
-      })
-    }
-  }
-
-  /**
    * 👶 Get all clients
    */
   async getClients({ request, response }: HttpContext) {
@@ -1469,11 +1454,30 @@ export default class AdminController {
       const limit = request.input('limit', 10)
       const status = request.input('status')
 
-      let query = SessionLog.query().preload('client').preload('rbt').preload('bcba')
+      let query = SessionLog.query()
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
+      
       if (status) query = query.where('status', status)
 
       const sessions = await query.orderBy('created_at', 'desc').paginate(page, limit)
-      return response.json({ data: sessions.all(), meta: sessions.getMeta() })
+      
+      // Format the response to include participant count
+      const formattedSessions = sessions.all().map((session) => {
+        const sessionData = session.toJSON()
+        return {
+          ...sessionData,
+          participantCount: session.sessionType !== 'one_to_one' 
+            ? session.participants?.length || 0 
+            : 1,
+        }
+      })
+      
+      return response.json({ data: formattedSessions, meta: sessions.getMeta() })
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch sessions',

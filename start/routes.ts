@@ -21,6 +21,7 @@ const MessagesController = () => import('#controllers/messages_controller')
 const SchedulesController = () => import('#controllers/schedules_controller')
 const TreatmentGoalsController = () => import('#controllers/treatment_goals_controller')
 const DocumentsController = () => import('#controllers/documents_controller')
+const SessionsController = () => import('#controllers/sessions_controller')
 
 // Health check route
 router.get('/health', async ({ response }) => {
@@ -156,6 +157,13 @@ router.group(() => {
 
     // Common routes for all authenticated users
     router.group(() => {
+      // Sessions (all roles can manage sessions)
+      router.get('/sessions/clients-for-group', [SessionsController, 'getClientsForGroupSession'])
+      router.get('/sessions/rbt/schedule', [SessionsController, 'getRbtSchedule'])
+      router.post('/sessions/check-overlap', [SessionsController, 'checkOverlap'])
+      router.post('/sessions', [SessionsController, 'create'])
+      router.get('/sessions/:id', [SessionsController, 'show'])
+      
       // Messages (all roles can send/receive messages)
       router.get('/messages', [MessagesController, 'index'])
       router.post('/messages', [MessagesController, 'store'])
