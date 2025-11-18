@@ -1583,4 +1583,113 @@ export default class AdminController {
       })
     }
   }
+
+  /**
+   * 🏥 Get all clinics
+   */
+  async getClinics({ response }: HttpContext) {
+    try {
+      const clinics = await Clinic.query().orderBy('name', 'asc')
+
+      return response.json({
+        data: clinics.map(clinic => ({
+          id: clinic.id,
+          name: clinic.name,
+          street: clinic.street,
+          city: clinic.city,
+          state: clinic.state,
+          zipCode: clinic.zipCode,
+          phone: clinic.phone,
+          email: clinic.email,
+          npiNumber: clinic.npiNumber,
+          taxId: clinic.taxId,
+          isActive: clinic.isActive,
+          createdAt: clinic.createdAt.toISO(),
+        }))
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch clinics',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🏥 Create a new clinic
+   */
+  async createClinic({ request, response }: HttpContext) {
+    try {
+      const data = request.only([
+        'name',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'npiNumber',
+        'taxId',
+      ])
+
+      const clinic = await Clinic.create({
+        ...data,
+        isActive: true,
+      })
+
+      return response.status(201).json({
+        message: 'Clinic created successfully',
+        data: {
+          id: clinic.id,
+          name: clinic.name,
+          email: clinic.email,
+          createdAt: clinic.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to create clinic',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🏥 Update a clinic
+   */
+  async updateClinic({ params, request, response }: HttpContext) {
+    try {
+      const clinic = await Clinic.findOrFail(params.id)
+      
+      const data = request.only([
+        'name',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'npiNumber',
+        'taxId',
+      ])
+
+      clinic.merge(data)
+      await clinic.save()
+
+      return response.json({
+        message: 'Clinic updated successfully',
+        data: {
+          id: clinic.id,
+          name: clinic.name,
+          email: clinic.email,
+          updatedAt: clinic.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to update clinic',
+        error: error.message,
+      })
+    }
+  }
 }

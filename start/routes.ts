@@ -53,7 +53,11 @@ router.group(() => {
     router.group(() => {
       router.get('/dashboard', [AdminController, 'dashboard'])
       router.get('/stats', [AdminController, 'getStats'])
+      
+      // Clinic management
       router.get('/clinics', [AdminController, 'getClinics'])
+      router.post('/clinics', [AdminController, 'createClinic'])
+      router.put('/clinics/:id', [AdminController, 'updateClinic'])
       
       // User management
       router.get('/users', [AdminController, 'getUsers'])
