@@ -1,6 +1,9 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import User from '#models/user'
-import { loginValidator, registerValidator } from '#validators/auth'
+import PasswordResetToken from '#models/password_reset_token'
+import { loginValidator, registerValidator, forgotPasswordValidator, resetPasswordValidator } from '#validators/auth'
+import { DateTime } from 'luxon'
+import crypto from 'node:crypto'
 
 export default class AuthController {
   /**
@@ -67,7 +70,8 @@ export default class AuthController {
       if (!user) {
         console.log('❌ User not found:', payload.email)
         return response.status(401).json({
-          message: 'Invalid credentials',
+          message: 'Incorrect email or password',
+          field: 'credentials'
         })
       }
 
@@ -83,15 +87,17 @@ export default class AuthController {
       if (!isValidPassword) {
         console.log('❌ Invalid password for:', payload.email)
         return response.status(401).json({
-          message: 'Invalid credentials',
+          message: 'Incorrect email or password',
+          field: 'credentials'
         })
       }
 
       // Check if user is active
       if (!user.isActive) {
         console.log('❌ User is inactive:', payload.email)
-        return response.status(401).json({
-          message: 'Account is deactivated',
+        return response.status(403).json({
+          message: 'Your account has been deactivated. Please contact support.',
+          field: 'account'
         })
       }
 
@@ -110,7 +116,7 @@ export default class AuthController {
     } catch (error) {
       console.error('❌ Login error:', error)
       return response.status(400).json({
-        message: 'Login failed',
+        message: 'Login failed. Please try again.',
         errors: error.messages || error.message,
       })
     }
@@ -232,6 +238,118 @@ export default class AuthController {
       return response.status(401).json({
         message: 'Token refresh failed',
         error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Request password reset
+   * Generates a secure token and sends reset email
+   */
+  async forgotPassword({ request, response }: HttpContext) {
+    try {
+      const payload = await request.validateUsing(forgotPasswordValidator)
+      
+      // Find user by email
+      const user = await User.findBy('email', payload.email)
+      
+      // Always return success to prevent email enumeration
+      if (!user) {
+        console.log('⚠️ Password reset requested for non-existent email:', payload.email)
+        return response.json({
+          message: 'If an account exists with this email, you will receive password reset instructions.',
+        })
+      }
+
+      // Generate secure random token
+      const token = crypto.randomBytes(32).toString('hex')
+      
+      // Delete any existing tokens for this email
+      await PasswordResetToken.query().where('email', payload.email).delete()
+      
+      // Create new reset token (expires in 1 hour)
+      await PasswordResetToken.create({
+        email: payload.email,
+        token,
+        expiresAt: DateTime.now().plus({ hours: 1 }),
+      })
+
+      console.log('✅ Password reset token generated for:', payload.email)
+      
+      // TODO: Send email with reset link
+      // For now, log the token (REMOVE IN PRODUCTION)
+      console.log('🔗 Reset token:', token)
+      console.log('🔗 Reset URL:', `${process.env.FRONTEND_URL}/reset-password?token=${token}`)
+
+      return response.json({
+        message: 'If an account exists with this email, you will receive password reset instructions.',
+        // DEVELOPMENT ONLY - Remove in production
+        ...(process.env.NODE_ENV === 'development' && { token, resetUrl: `/reset-password?token=${token}` }),
+      })
+    } catch (error) {
+      console.error('Forgot password error:', error)
+      return response.status(400).json({
+        message: 'Unable to process password reset request. Please try again.',
+        errors: error.messages || error.message,
+      })
+    }
+  }
+
+  /**
+   * Reset password using token
+   */
+  async resetPassword({ request, response }: HttpContext) {
+    try {
+      const payload = await request.validateUsing(resetPasswordValidator)
+      
+      // Find token
+      const resetToken = await PasswordResetToken.findBy('token', payload.token)
+      
+      if (!resetToken) {
+        return response.status(400).json({
+          message: 'Invalid or expired reset token.',
+          field: 'token'
+        })
+      }
+
+      // Check if token is valid
+      if (!resetToken.isValid()) {
+        return response.status(400).json({
+          message: resetToken.isUsed() 
+            ? 'This reset link has already been used.' 
+            : 'This reset link has expired. Please request a new one.',
+          field: 'token'
+        })
+      }
+
+      // Find user
+      const user = await User.findBy('email', resetToken.email)
+      
+      if (!user) {
+        return response.status(400).json({
+          message: 'User account not found.',
+          field: 'token'
+        })
+      }
+
+      // Update password
+      user.password = payload.password
+      await user.save()
+
+      // Mark token as used
+      resetToken.usedAt = DateTime.now()
+      await resetToken.save()
+
+      console.log('✅ Password reset successful for:', user.email)
+
+      return response.json({
+        message: 'Password reset successful. You can now log in with your new password.',
+      })
+    } catch (error) {
+      console.error('Reset password error:', error)
+      return response.status(400).json({
+        message: 'Unable to reset password. Please try again.',
+        errors: error.messages || error.message,
       })
     }
   }
