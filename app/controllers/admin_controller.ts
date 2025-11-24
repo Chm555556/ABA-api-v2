@@ -1487,6 +1487,71 @@ export default class AdminController {
   }
 
   /**
+   * 🔍 Get single session with full details (Admin)
+   */
+  async getSession({ params, response }: HttpContext) {
+    try {
+      const session = await SessionLog.query()
+        .where('id', params.id)
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
+        .firstOrFail()
+
+      // Format the response with full details
+      const sessionData = {
+        id: session.id,
+        sessionType: session.sessionType,
+        clientId: session.clientId,
+        client: session.client ? {
+          id: session.client.id,
+          name: session.client.fullName,
+          fullName: session.client.fullName,
+        } : null,
+        rbtId: session.rbtId,
+        rbt: {
+          id: session.rbt.id,
+          name: session.rbt.name,
+        },
+        bcbaId: session.bcbaId,
+        bcba: {
+          id: session.bcba.id,
+          name: session.bcba.name,
+        },
+        date: session.date instanceof DateTime ? session.date.toISODate() : session.date,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        duration: session.duration,
+        totalHours: session.totalHours,
+        location: session.location,
+        sessionNotes: session.sessionNotes,
+        status: session.status,
+        participantCount: session.sessionType !== 'one_to_one' 
+          ? session.participants?.length || 0 
+          : 1,
+        participants: session.participants?.map((participant) => ({
+          id: participant.id,
+          clientId: participant.clientId,
+          clientName: participant.client?.fullName || `Client ${participant.clientId}`,
+          parentName: participant.client?.emergencyContactName || 'N/A',
+          parentPhone: participant.client?.emergencyContactPhone || 'N/A',
+        })) || [],
+      }
+
+      return response.json(sessionData)
+    } catch (error) {
+      console.error('Error fetching session:', error)
+      return response.status(404).json({
+        message: 'Session not found',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
    * ➕ Create new session (Admin)
    */
   async createSession({ request, response }: HttpContext) {

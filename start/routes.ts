@@ -74,6 +74,7 @@ router.group(() => {
       
       // Session management
       router.get('/sessions', [AdminController, 'getSessions'])
+      router.get('/sessions/:id', [AdminController, 'getSession'])
       router.post('/sessions', [AdminController, 'createSession'])
     }).prefix('/admin').use(middleware.role({ roles: ['ADMIN'] }))
 
