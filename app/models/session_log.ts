@@ -45,6 +45,9 @@ export default class SessionLog extends BaseModel {
   declare location: 'clinic' | 'home' | 'school' | 'community'
 
   @column()
+  declare locationAddress: string | null
+
+  @column()
   declare sessionType: 'one_to_one' | 'group' | 'community'
 
   @column()
@@ -82,6 +85,43 @@ export default class SessionLog extends BaseModel {
 
   @column()
   declare clinicNotes: string | null
+
+  @column()
+  declare isRecurring: boolean
+
+  @column()
+  declare recurrencePattern: string | null
+
+  @column({
+    prepare: (value: number[] | null) => (value ? JSON.stringify(value) : null),
+    consume: (value: string | null) => {
+      if (!value) return null
+      try {
+        return JSON.parse(value)
+      } catch {
+        return null
+      }
+    },
+  })
+  declare recurrenceDays: number[] | null
+
+  @column()
+  declare recurrenceInterval: number | null
+
+  @column.date()
+  declare recurrenceEndDate: DateTime | null
+
+  @column()
+  declare recurrenceCount: number | null
+
+  @column()
+  declare parentSessionId: number | null
+
+  @column()
+  declare isSeriesMaster: boolean
+
+  @column()
+  declare occurrenceNumber: number | null
 
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
@@ -127,6 +167,16 @@ export default class SessionLog extends BaseModel {
     foreignKey: 'sessionLogId',
   })
   declare participants: HasMany<typeof SessionParticipant>
+
+  @belongsTo(() => SessionLog, {
+    foreignKey: 'parentSessionId',
+  })
+  declare parentSession: BelongsTo<typeof SessionLog>
+
+  @hasMany(() => SessionLog, {
+    foreignKey: 'parentSessionId',
+  })
+  declare childSessions: HasMany<typeof SessionLog>
 
   // Computed properties
   get clientName() {

@@ -1493,13 +1493,37 @@ export default class AdminController {
     try {
       const session = await SessionLog.query()
         .where('id', params.id)
-        .preload('client')
+        .preload('client', (clientQuery) => {
+          clientQuery.preload('clinic').preload('bcba')
+        })
         .preload('rbt')
         .preload('bcba')
         .preload('participants', (participantsQuery) => {
-          participantsQuery.preload('client')
+          participantsQuery.preload('client', (clientQuery) => {
+            clientQuery.preload('clinic')
+          })
         })
         .firstOrFail()
+
+      // Get all occurrences if this is a recurring session
+      let allOccurrences: any[] = []
+      if (session.isRecurring) {
+        const occurrencesQuery = session.isSeriesMaster
+          ? SessionLog.query().where('parent_session_id', session.id).orWhere('id', session.id)
+          : SessionLog.query().where('parent_session_id', session.parentSessionId || session.id).orWhere('id', session.parentSessionId || session.id)
+        
+        const occurrences = await occurrencesQuery
+          .select('id', 'date', 'start_time', 'end_time', 'occurrence_number')
+          .orderBy('occurrence_number', 'asc')
+        
+        allOccurrences = occurrences.map((occ) => ({
+          id: occ.id,
+          date: occ.date instanceof DateTime ? occ.date.toISODate() : occ.date,
+          startTime: occ.startTime,
+          endTime: occ.endTime,
+          occurrenceNumber: occ.occurrenceNumber,
+        }))
+      }
 
       // Format the response with full details
       const sessionData = {
@@ -1510,16 +1534,23 @@ export default class AdminController {
           id: session.client.id,
           name: session.client.fullName,
           fullName: session.client.fullName,
+          age: session.client.age,
+          diagnosis: session.client.diagnosis,
+          parentName: session.client.emergencyContactName,
+          parentPhone: session.client.emergencyContactPhone,
+          clinicName: session.client.clinic?.name || 'N/A',
         } : null,
         rbtId: session.rbtId,
         rbt: {
           id: session.rbt.id,
           name: session.rbt.name,
+          email: session.rbt.email,
         },
         bcbaId: session.bcbaId,
         bcba: {
           id: session.bcba.id,
           name: session.bcba.name,
+          email: session.bcba.email,
         },
         date: session.date instanceof DateTime ? session.date.toISODate() : session.date,
         startTime: session.startTime,
@@ -1527,8 +1558,18 @@ export default class AdminController {
         duration: session.duration,
         totalHours: session.totalHours,
         location: session.location,
+        locationAddress: session.locationAddress,
         sessionNotes: session.sessionNotes,
         status: session.status,
+        isRecurring: session.isRecurring,
+        recurrencePattern: session.recurrencePattern,
+        recurrenceDays: session.recurrenceDays,
+        recurrenceEndDate: session.recurrenceEndDate instanceof DateTime ? session.recurrenceEndDate.toISODate() : session.recurrenceEndDate,
+        recurrenceCount: session.recurrenceCount,
+        isSeriesMaster: session.isSeriesMaster,
+        occurrenceNumber: session.occurrenceNumber,
+        parentSessionId: session.parentSessionId,
+        allOccurrences,
         participantCount: session.sessionType !== 'one_to_one' 
           ? session.participants?.length || 0 
           : 1,
@@ -1536,8 +1577,10 @@ export default class AdminController {
           id: participant.id,
           clientId: participant.clientId,
           clientName: participant.client?.fullName || `Client ${participant.clientId}`,
+          clientAge: participant.client?.age,
           parentName: participant.client?.emergencyContactName || 'N/A',
           parentPhone: participant.client?.emergencyContactPhone || 'N/A',
+          clinicName: participant.client?.clinic?.name || 'N/A',
         })) || [],
       }
 

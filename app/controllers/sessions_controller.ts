@@ -4,6 +4,7 @@ import SessionParticipant from '#models/session_participant'
 import Client from '#models/client'
 import User from '#models/user'
 import SessionOverlapService from '#services/session_overlap_service'
+import RecurringSessionService from '#services/recurring_session_service'
 import { DateTime } from 'luxon'
 import db from '@adonisjs/lucid/services/db'
 
@@ -146,6 +147,7 @@ export default class SessionsController {
   
   /**
    * Create a new session (one-to-one, group, or community)
+   * Supports recurring sessions
    */
   async create({ request, auth, response }: HttpContext) {
     const trx = await db.transaction()
@@ -166,7 +168,9 @@ export default class SessionsController {
         'cptCode',
         'serviceType',
         'location',
+        'locationAddress',
         'sessionNotes',
+        'recurrence', // New: recurrence configuration
       ])
       
       // Validate session type
@@ -195,7 +199,10 @@ export default class SessionsController {
         }
       }
       
-      // Check for overlaps
+      // Check if this is a recurring session
+      const recurrence = data.recurrence || { pattern: 'none' }
+      
+      // Check for overlaps (only for first occurrence)
       const sessionDate = DateTime.fromISO(data.date)
       const overlapCheck = await SessionOverlapService.checkOverlap(
         data.rbtId,
@@ -212,13 +219,16 @@ export default class SessionsController {
         })
       }
       
-      // Create session
-      const session = await SessionLog.create(
+      await trx.commit()
+      
+      // Create session(s) using RecurringSessionService
+      const sessions = await RecurringSessionService.createRecurringSessions(
         {
           clientId: data.sessionType === 'one_to_one' ? data.clientId : null,
+          clientIds: data.clientIds,
           rbtId: data.rbtId,
           bcbaId: data.bcbaId,
-          date: sessionDate,
+          date: data.date,
           startTime: data.startTime,
           endTime: data.endTime,
           duration: data.duration,
@@ -226,30 +236,15 @@ export default class SessionsController {
           cptCode: data.cptCode,
           serviceType: data.serviceType,
           location: data.location,
+          locationAddress: data.locationAddress,
           sessionType: data.sessionType,
           sessionNotes: data.sessionNotes,
-          rbtSignature: '',
           status: 'draft',
-          bcbaApproved: false,
-          clinicApproved: false,
         },
-        { client: trx }
+        recurrence
       )
       
-      // For group/community sessions, create participants
-      if (data.sessionType !== 'one_to_one' && data.clientIds) {
-        for (const clientId of data.clientIds) {
-          await SessionParticipant.create(
-            {
-              sessionLogId: session.id,
-              clientId: clientId,
-            },
-            { client: trx }
-          )
-        }
-      }
-      
-      await trx.commit()
+      const session = sessions[0] // Get the first/master session
       
       // Load relationships
       await session.load('rbt')
@@ -264,7 +259,10 @@ export default class SessionsController {
       }
       
       return response.created({
-        message: 'Session created successfully',
+        message: sessions.length > 1 
+          ? `${sessions.length} recurring sessions created successfully`
+          : 'Session created successfully',
+        sessionsCreated: sessions.length,
         session: {
           id: session.id,
           sessionType: session.sessionType,
@@ -274,6 +272,8 @@ export default class SessionsController {
           duration: session.duration,
           location: session.location,
           status: session.status,
+          isRecurring: session.isRecurring,
+          recurrencePattern: session.recurrencePattern,
           rbt: {
             id: session.rbt.id,
             name: session.rbt.name,
