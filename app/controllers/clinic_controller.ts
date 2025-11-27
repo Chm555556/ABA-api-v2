@@ -1656,4 +1656,32 @@ async createSchedule({ auth, request, response }: HttpContext) {
       })
     }
   }
+
+  /**
+   * Get all clinics
+   */
+  async getClinics({ response }: HttpContext) {
+    try {
+      const Clinic = (await import('#models/clinic')).default
+      const clinics = await Clinic.query().orderBy('name', 'asc')
+
+      return response.json({
+        data: clinics.map(clinic => ({
+          id: clinic.id,
+          name: clinic.name,
+          street: clinic.street,
+          city: clinic.city,
+          state: clinic.state,
+          zipCode: clinic.zipCode,
+          phone: clinic.phone,
+          email: clinic.email,
+        })),
+      })
+    } catch (error: any) {
+      return response.status(500).json({
+        message: 'Failed to fetch clinics',
+        error: error.message,
+      })
+    }
+  }
 }

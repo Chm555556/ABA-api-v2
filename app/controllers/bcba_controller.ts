@@ -1037,4 +1037,282 @@ export default class BCBAController {
       })
     }
   }
+
+  /**
+   * Create a new session
+   */
+  async createSession({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const data = request.only([
+        'sessionType',
+        'clientId',
+        'clientIds',
+        'rbtId',
+        'date',
+        'startTime',
+        'endTime',
+        'duration',
+        'totalHours',
+        'location',
+        'locationAddress',
+        'sessionNotes',
+        'cptCode',
+        'serviceType',
+        'status',
+        'isRecurring',
+        'recurrencePattern',
+        'recurrenceDays',
+        'recurrenceEndDate',
+        'recurrenceCount',
+      ])
+
+      console.log('📝 BCBA creating session:', data)
+
+      // Verify the RBT is supervised by this BCBA
+      const rbt = await User.query()
+        .where('id', data.rbtId)
+        .where('supervisor_id', user.id)
+        .where('role', 'RBT')
+        .first()
+
+      if (!rbt) {
+        return response.status(403).json({
+          message: 'You can only create sessions for RBTs you supervise',
+        })
+      }
+
+      // Prepare session data
+      const sessionData: any = {
+        sessionType: data.sessionType || 'one_to_one',
+        rbtId: data.rbtId,
+        bcbaId: user.id,
+        date: DateTime.fromISO(data.date),
+        startTime: data.startTime,
+        endTime: data.endTime,
+        duration: data.duration,
+        totalHours: data.totalHours,
+        location: data.location,
+        locationAddress: data.locationAddress || null,
+        sessionNotes: data.sessionNotes || null,
+        cptCode: data.cptCode || '97153',
+        serviceType: data.serviceType || 'Direct Service',
+        status: data.status || 'draft',
+        rbtSignature: rbt.name,
+        isRecurring: data.isRecurring || false,
+        recurrencePattern: data.recurrencePattern || null,
+        recurrenceDays: data.recurrenceDays || null,
+        recurrenceEndDate: data.recurrenceEndDate ? DateTime.fromISO(data.recurrenceEndDate) : null,
+        recurrenceCount: data.recurrenceCount || null,
+      }
+
+      // Handle one-to-one session
+      if (data.sessionType === 'one_to_one') {
+        if (!data.clientId) {
+          return response.status(400).json({
+            message: 'Client ID is required for one-to-one sessions',
+          })
+        }
+
+        // Verify client is assigned to this BCBA
+        const client = await Client.query()
+          .where('id', data.clientId)
+          .where('assigned_bcba', user.id)
+          .first()
+
+        if (!client) {
+          return response.status(403).json({
+            message: 'Client not found or not assigned to you',
+          })
+        }
+
+        sessionData.clientId = data.clientId
+        sessionData.sessionType = 'one_to_one'
+
+        // Create the session
+        const session = await SessionLog.create(sessionData)
+
+        // If recurring, create additional occurrences
+        if (data.isRecurring && data.recurrenceCount && data.recurrenceCount > 1) {
+          await this.createRecurringOccurrences(session, data)
+        }
+
+        await session.load('client')
+        await session.load('rbt')
+        await session.load('bcba')
+
+        console.log('✅ One-to-one session created:', session.id)
+
+        return response.status(201).json({
+          message: 'Session created successfully',
+          session: {
+            id: session.id,
+            sessionType: session.sessionType,
+            clientId: session.clientId,
+            clientName: session.client?.fullName,
+            rbtId: session.rbtId,
+            rbtName: session.rbt?.name,
+            bcbaId: session.bcbaId,
+            bcbaName: session.bcba?.name,
+            date: session.date.toISODate(),
+            startTime: session.startTime,
+            endTime: session.endTime,
+            duration: session.duration,
+            location: session.location,
+            status: session.status,
+            isRecurring: session.isRecurring,
+          },
+        })
+      }
+
+      // Handle group/community sessions
+      if (data.sessionType === 'group' || data.sessionType === 'community') {
+        if (!data.clientIds || data.clientIds.length === 0) {
+          return response.status(400).json({
+            message: 'At least one client is required for group/community sessions',
+          })
+        }
+
+        // Verify all clients are assigned to this BCBA
+        const clients = await Client.query()
+          .whereIn('id', data.clientIds)
+          .where('assigned_bcba', user.id)
+
+        if (clients.length !== data.clientIds.length) {
+          return response.status(403).json({
+            message: 'Some clients are not assigned to you',
+          })
+        }
+
+        // Create the master session (without clientId for group sessions)
+        sessionData.clientId = null
+        sessionData.isSeriesMaster = true
+
+        const masterSession = await SessionLog.create(sessionData)
+
+        // Create participant records
+        const SessionParticipant = (await import('#models/session_participant')).default
+        const participants = data.clientIds.map((clientId: number) => ({
+          sessionLogId: masterSession.id,
+          clientId: clientId,
+        }))
+
+        await SessionParticipant.createMany(participants)
+
+        // If recurring, create additional occurrences
+        if (data.isRecurring && data.recurrenceCount && data.recurrenceCount > 1) {
+          await this.createRecurringOccurrences(masterSession, data, data.clientIds)
+        }
+
+        await masterSession.load('rbt')
+        await masterSession.load('bcba')
+        await masterSession.load('participants')
+
+        console.log('✅ Group/community session created:', masterSession.id)
+
+        return response.status(201).json({
+          message: 'Session created successfully',
+          session: {
+            id: masterSession.id,
+            sessionType: masterSession.sessionType,
+            participantCount: participants.length,
+            rbtId: masterSession.rbtId,
+            rbtName: masterSession.rbt?.name,
+            bcbaId: masterSession.bcbaId,
+            bcbaName: masterSession.bcba?.name,
+            date: masterSession.date.toISODate(),
+            startTime: masterSession.startTime,
+            endTime: masterSession.endTime,
+            duration: masterSession.duration,
+            location: masterSession.location,
+            status: masterSession.status,
+            isRecurring: masterSession.isRecurring,
+          },
+        })
+      }
+
+      return response.status(400).json({
+        message: 'Invalid session type',
+      })
+    } catch (error: any) {
+      console.error('❌ Error creating session:', error)
+      return response.status(500).json({
+        message: 'Failed to create session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Helper method to create recurring session occurrences
+   */
+  private async createRecurringOccurrences(
+    masterSession: any,
+    data: any,
+    clientIds?: number[]
+  ) {
+    const occurrences: any[] = []
+    let currentDate = DateTime.fromISO(data.date)
+    const SessionParticipant = (await import('#models/session_participant')).default
+
+    for (let i = 1; i < data.recurrenceCount; i++) {
+      // Calculate next occurrence date based on pattern
+      if (data.recurrencePattern === 'daily') {
+        currentDate = currentDate.plus({ days: 1 })
+      } else if (data.recurrencePattern === 'weekly') {
+        currentDate = currentDate.plus({ weeks: 1 })
+      } else if (data.recurrencePattern === 'monthly') {
+        currentDate = currentDate.plus({ months: 1 })
+      }
+
+      // Check if we've reached the end date
+      if (data.recurrenceEndDate) {
+        const endDate = DateTime.fromISO(data.recurrenceEndDate)
+        if (currentDate > endDate) break
+      }
+
+      // Create occurrence
+      const occurrenceData = {
+        sessionType: masterSession.sessionType,
+        clientId: masterSession.clientId,
+        rbtId: masterSession.rbtId,
+        bcbaId: masterSession.bcbaId,
+        date: currentDate,
+        startTime: masterSession.startTime,
+        endTime: masterSession.endTime,
+        duration: masterSession.duration,
+        totalHours: masterSession.totalHours,
+        location: masterSession.location,
+        locationAddress: masterSession.locationAddress,
+        sessionNotes: masterSession.sessionNotes,
+        cptCode: masterSession.cptCode,
+        serviceType: masterSession.serviceType,
+        status: masterSession.status,
+        rbtSignature: masterSession.rbtSignature,
+        isRecurring: true,
+        recurrencePattern: masterSession.recurrencePattern,
+        recurrenceDays: masterSession.recurrenceDays,
+        recurrenceEndDate: masterSession.recurrenceEndDate,
+        recurrenceCount: masterSession.recurrenceCount,
+        parentSessionId: masterSession.id,
+        occurrenceNumber: i + 1,
+      }
+
+      const occurrence = await SessionLog.create(occurrenceData)
+
+      // If group/community session, create participants
+      if (clientIds && clientIds.length > 0) {
+        const participants = clientIds.map((clientId: number) => ({
+          sessionLogId: occurrence.id,
+          clientId: clientId,
+        }))
+        await SessionParticipant.createMany(participants)
+      }
+
+      occurrences.push(occurrence)
+    }
+
+    console.log(`✅ Created ${occurrences.length} recurring occurrences`)
+    return occurrences
+  }
 }

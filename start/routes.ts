@@ -95,9 +95,11 @@ router.group(() => {
     router.group(() => {
       router.get('/dashboard', [BCBAController, 'dashboard'])
       router.get('/clients', [BCBAController, 'getClients'])
+      router.get('/clinics', [ClinicController, 'getClinics'])
       router.get('/schedule', [BCBAController, 'getSchedule'])
       router.get('/sessions/pending', [BCBAController, 'getPendingSessions'])
       router.get('/sessions/:id', [BCBAController, 'getSessionDetails'])
+      router.post('/sessions', [BCBAController, 'createSession'])
       router.put('/sessions/:id/review', [BCBAController, 'reviewSession'])
       router.get('/treatment-goals', [BCBAController, 'getTreatmentGoals'])
       router.post('/treatment-goals', [BCBAController, 'createTreatmentGoal'])
@@ -126,6 +128,9 @@ router.group(() => {
     // Clinic routes
     router.group(() => {
       router.get('/dashboard', [ClinicController, 'dashboard'])
+      
+      // Clinic list
+      router.get('/clinics', [ClinicController, 'getClinics'])
       
       // Client management
       router.get('/clients', [ClinicController, 'getClients'])
