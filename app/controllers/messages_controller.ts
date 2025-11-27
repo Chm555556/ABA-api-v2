@@ -1,7 +1,6 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import Message from '#models/message'
 import User from '#models/user'
-import Client from '#models/client'
 
 export default class MessagesController {
   /**

@@ -2,7 +2,6 @@ import { BaseCommand } from '@adonisjs/core/ace'
 import type { CommandOptions } from '@adonisjs/core/types/ace'
 import User from '#models/user'
 import Clinic from '#models/clinic'
-import db from '@adonisjs/lucid/services/db'
 
 export default class FixClinicAssignments extends BaseCommand {
   static commandName = 'fix:clinic-assignments'
@@ -32,7 +31,10 @@ export default class FixClinicAssignments extends BaseCommand {
         this.logger.info('No clinic found, creating default clinic...')
         clinic = await Clinic.create({
           name: 'ABA Connect Main Clinic',
-          address: '123 Main Street, City, State 12345',
+          street: '123 Main Street',
+          city: 'City',
+          state: 'State',
+          zipCode: '12345',
           phone: '555-0100',
           email: 'info@abaconnect.com',
         })

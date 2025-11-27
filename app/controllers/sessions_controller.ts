@@ -1,6 +1,5 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import SessionLog from '#models/session_log'
-import SessionParticipant from '#models/session_participant'
 import Client from '#models/client'
 import User from '#models/user'
 import SessionOverlapService from '#services/session_overlap_service'
@@ -149,11 +148,11 @@ export default class SessionsController {
    * Create a new session (one-to-one, group, or community)
    * Supports recurring sessions
    */
-  async create({ request, auth, response }: HttpContext) {
+  async create({ request, response }: HttpContext) {
     const trx = await db.transaction()
     
     try {
-      const user = auth.user!
+      // const user = auth.user!
       const data = request.only([
         'sessionType',
         'clientId',

@@ -125,7 +125,7 @@ export default class SessionOverlapService {
   /**
    * Calculate next available time slot for RBT
    */
-  static calculateNextAvailableTime(lastSessionEnd: DateTime, duration: number): DateTime {
+  static calculateNextAvailableTime(lastSessionEnd: DateTime, _duration: number): DateTime {
     // Add 1 hour buffer after last session
     return lastSessionEnd.plus({ minutes: 60 })
   }

@@ -31,21 +31,21 @@ export default class MainSeeder extends BaseSeeder {
       isActive: true,
     })
 
-    const clinic2 = await Clinic.create({
-      name: 'Behavioral Health Solutions',
-      street: '456 Wellness Blvd',
-      city: 'Dallas',
-      state: 'TX',
-      zipCode: '75201',
-      phone: '(214) 555-0456',
-      email: 'contact@behavioralhealth.com',
-      npiNumber: '0987654321',
-      taxId: '98-7654321',
-      isActive: true,
-    })
+    // const clinic2 = await Clinic.create({
+    //   name: 'Behavioral Health Solutions',
+    //   street: '456 Wellness Blvd',
+    //   city: 'Dallas',
+    //   state: 'TX',
+    //   zipCode: '75201',
+    //   phone: '(214) 555-0456',
+    //   email: 'contact@behavioralhealth.com',
+    //   npiNumber: '0987654321',
+    //   taxId: '98-7654321',
+    //   isActive: true,
+    // })
 
     // Create admin user with your credentials
-    const admin = await User.create({
+    await User.create({
       name: 'CHM Dev Admin',
       email: 'chmdev@gmail.com',
       password: 'chmdev@gmail.com',
@@ -552,7 +552,7 @@ export default class MainSeeder extends BaseSeeder {
       percentage: 71,
     })
 
-    const behaviorData3 = await BehaviorData.create({
+    await BehaviorData.create({
       sessionId: session2.id,
       goalId: goal3.id,
       correct: 7,
@@ -567,7 +567,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         behaviorDataId: behaviorData1.id,
         prompt: 'Alex, look at me',
-        response: 'correct',
+        response: 'correct' as 'correct' | 'incorrect' | 'prompted' | 'no_response',
         reinforcement: 'Verbal praise',
         notes: 'Good eye contact for 3 seconds',
         timestamp: DateTime.now().minus({ hours: 2 }),
@@ -575,7 +575,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         behaviorDataId: behaviorData1.id,
         prompt: 'Alex, look at me',
-        response: 'prompted',
+        response: 'prompted' as 'correct' | 'incorrect' | 'prompted' | 'no_response',
         reinforcement: 'Physical prompt + praise',
         notes: 'Needed gentle chin prompt',
         timestamp: DateTime.now().minus({ hours: 2, minutes: 5 }),
@@ -583,7 +583,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         behaviorDataId: behaviorData2.id,
         prompt: 'What do you want?',
-        response: 'correct',
+        response: 'correct' as 'correct' | 'incorrect' | 'prompted' | 'no_response',
         reinforcement: 'Access to item + praise',
         notes: 'Used PECS card independently',
         timestamp: DateTime.now().minus({ hours: 1, minutes: 30 }),
@@ -601,7 +601,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Weekly Progress Update',
         content: 'Alex had a great week! He is showing improvement in eye contact and is beginning to use PECS more independently. Please continue practicing at home.',
         isRead: false,
-        priority: 'normal',
+        priority: 'normal' as 'low' | 'normal' | 'high',
       },
       {
         fromUserId: parent.id,
@@ -610,7 +610,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Question about home practice',
         content: 'Hi Dr. Johnson, I wanted to ask about the best way to practice eye contact at home. Should we use the same prompts as in therapy?',
         isRead: true,
-        priority: 'normal',
+        priority: 'normal' as 'low' | 'normal' | 'high',
       },
       {
         fromUserId: rbt1.id,
@@ -619,7 +619,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Session Notes - Emma',
         content: 'Emma seemed a bit tired today and had difficulty following multi-step instructions. Should we modify the program?',
         isRead: false,
-        priority: 'high',
+        priority: 'high' as 'low' | 'normal' | 'high',
       },
     ]
 
@@ -633,7 +633,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Monthly Report Due',
         content: 'Please submit your monthly progress reports by the end of the week.',
         isRead: false,
-        priority: 'normal',
+        priority: 'normal' as 'low' | 'normal' | 'high',
       },
       {
         fromUserId: rbt2.id,
@@ -642,7 +642,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Behavior Concerns - Sophia',
         content: 'Sophia has been showing increased aggression during transitions. Need guidance on intervention strategies.',
         isRead: false,
-        priority: 'high',
+        priority: 'high' as 'low' | 'normal' | 'high',
       },
       {
         fromUserId: parent2.id,
@@ -651,7 +651,7 @@ export default class MainSeeder extends BaseSeeder {
         subject: 'Schedule Change Request',
         content: 'Can we move Emma\'s Tuesday session to Wednesday this week? We have a doctor appointment.',
         isRead: true,
-        priority: 'normal',
+        priority: 'normal' as 'low' | 'normal' | 'high',
       },
     ]
 
@@ -662,7 +662,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         clientId: client1.id,
         name: 'Initial Assessment Report',
-        type: 'assessment',
+        type: 'assessment' as 'consent' | 'medical' | 'assessment' | 'report' | 'other',
         url: '/documents/alex-initial-assessment.pdf',
         uploadedBy: bcba.id,
         uploadedAt: DateTime.now().minus({ days: 30 }),
@@ -670,7 +670,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         clientId: client1.id,
         name: 'Parent Consent Form',
-        type: 'consent',
+        type: 'consent' as 'consent' | 'medical' | 'assessment' | 'report' | 'other',
         url: '/documents/alex-consent-form.pdf',
         uploadedBy: clinicManager.id,
         uploadedAt: DateTime.now().minus({ days: 35 }),
@@ -678,7 +678,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         clientId: client2.id,
         name: 'Medical History',
-        type: 'medical',
+        type: 'medical' as 'consent' | 'medical' | 'assessment' | 'report' | 'other',
         url: '/documents/emma-medical-history.pdf',
         uploadedBy: clinicManager.id,
         uploadedAt: DateTime.now().minus({ days: 25 }),
@@ -686,7 +686,7 @@ export default class MainSeeder extends BaseSeeder {
       {
         clientId: client3.id,
         name: 'Progress Report - Q1 2024',
-        type: 'report',
+        type: 'report' as 'consent' | 'medical' | 'assessment' | 'report' | 'other',
         url: '/documents/sophia-progress-q1.pdf',
         uploadedBy: bcba2.id,
         uploadedAt: DateTime.now().minus({ days: 10 }),
@@ -759,10 +759,10 @@ export default class MainSeeder extends BaseSeeder {
         totalHours: 1.5,
         cptCode: '97153',
         serviceType: 'Direct Service',
-        location: 'clinic',
+        location: 'clinic' as 'clinic' | 'home' | 'school' | 'community',
         sessionNotes: `Session ${i}: Continued work on communication goals. Client showing progress.`,
         rbtSignature: rbt1.name,
-        status: i <= 3 ? 'approved' : 'bcba_approved',
+        status: (i <= 3 ? 'approved' : 'bcba_approved') as 'draft' | 'submitted' | 'bcba_approved' | 'clinic_approved' | 'approved' | 'rejected',
         bcbaApproved: true,
         bcbaApprovedBy: bcba.id,
         bcbaApprovedAt: DateTime.now().minus({ days: i - 1 }),
@@ -780,10 +780,10 @@ export default class MainSeeder extends BaseSeeder {
         totalHours: 1.0,
         cptCode: '97153',
         serviceType: 'Direct Service',
-        location: 'clinic',
+        location: 'clinic' as 'clinic' | 'home' | 'school' | 'community',
         sessionNotes: `Session ${i}: Working on instruction following and behavior reduction.`,
         rbtSignature: rbt1.name,
-        status: i <= 2 ? 'approved' : i <= 4 ? 'bcba_approved' : 'submitted',
+        status: (i <= 2 ? 'approved' : i <= 4 ? 'bcba_approved' : 'submitted') as 'draft' | 'submitted' | 'bcba_approved' | 'clinic_approved' | 'approved' | 'rejected',
         bcbaApproved: i <= 4,
         bcbaApprovedBy: i <= 4 ? bcba.id : null,
         bcbaApprovedAt: i <= 4 ? DateTime.now().minus({ days: i - 1 }) : null,

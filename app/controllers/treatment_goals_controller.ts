@@ -294,16 +294,16 @@ export default class TreatmentGoalsController {
       // Get behavior data for this goal
       let behaviorQuery = BehaviorData.query()
         .where('goal_id', goal.id)
-        .preload('session')
+        .preload('session' as any)
 
       if (startDate) {
-        behaviorQuery = behaviorQuery.whereHas('session', (sessionQuery) => {
+        behaviorQuery = behaviorQuery.whereHas('session' as any, (sessionQuery) => {
           sessionQuery.where('date', '>=', startDate)
         })
       }
 
       if (endDate) {
-        behaviorQuery = behaviorQuery.whereHas('session', (sessionQuery) => {
+        behaviorQuery = behaviorQuery.whereHas('session' as any, (sessionQuery) => {
           sessionQuery.where('date', '<=', endDate)
         })
       }
