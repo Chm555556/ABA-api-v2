@@ -5,13 +5,14 @@ import Client from './client.js'
 import User from './user.js'
 import BehaviorData from './behavior_data.js'
 import Incident from './incident.js'
+import SessionParticipant from './session_participant.js'
 
 export default class SessionLog extends BaseModel {
   @column({ isPrimary: true })
   declare id: number
 
   @column()
-  declare clientId: number
+  declare clientId: number | null
 
   @column()
   declare rbtId: number
@@ -42,6 +43,12 @@ export default class SessionLog extends BaseModel {
 
   @column()
   declare location: 'clinic' | 'home' | 'school' | 'community'
+
+  @column()
+  declare locationAddress: string | null
+
+  @column()
+  declare sessionType: 'one_to_one' | 'group' | 'community'
 
   @column()
   declare sessionNotes: string | null
@@ -79,6 +86,43 @@ export default class SessionLog extends BaseModel {
   @column()
   declare clinicNotes: string | null
 
+  @column()
+  declare isRecurring: boolean
+
+  @column()
+  declare recurrencePattern: string | null
+
+  @column({
+    prepare: (value: number[] | null) => (value ? JSON.stringify(value) : null),
+    consume: (value: string | null) => {
+      if (!value) return null
+      try {
+        return JSON.parse(value)
+      } catch {
+        return null
+      }
+    },
+  })
+  declare recurrenceDays: number[] | null
+
+  @column()
+  declare recurrenceInterval: number | null
+
+  @column.date()
+  declare recurrenceEndDate: DateTime | null
+
+  @column()
+  declare recurrenceCount: number | null
+
+  @column()
+  declare parentSessionId: number | null
+
+  @column()
+  declare isSeriesMaster: boolean
+
+  @column()
+  declare occurrenceNumber: number | null
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
@@ -109,11 +153,30 @@ export default class SessionLog extends BaseModel {
   })
   declare clinicApprover: BelongsTo<typeof User>
 
-  @hasMany(() => BehaviorData)
+  @hasMany(() => BehaviorData, {
+    foreignKey: 'sessionId',
+  })
   declare behaviorData: HasMany<typeof BehaviorData>
 
-  @hasMany(() => Incident)
+  @hasMany(() => Incident, {
+    foreignKey: 'sessionId',
+  })
   declare incidents: HasMany<typeof Incident>
+
+  @hasMany(() => SessionParticipant, {
+    foreignKey: 'sessionLogId',
+  })
+  declare participants: HasMany<typeof SessionParticipant>
+
+  @belongsTo(() => SessionLog, {
+    foreignKey: 'parentSessionId',
+  })
+  declare parentSession: BelongsTo<typeof SessionLog>
+
+  @hasMany(() => SessionLog, {
+    foreignKey: 'parentSessionId',
+  })
+  declare childSessions: HasMany<typeof SessionLog>
 
   // Computed properties
   get clientName() {

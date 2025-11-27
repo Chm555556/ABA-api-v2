@@ -413,10 +413,9 @@ export default class ParentController {
         clientId,
         name,
         type,
-        description,
         fileContent,
         fileType,
-      } = request.only(['clientId', 'name', 'type', 'description', 'fileContent', 'fileType'])
+      } = request.only(['clientId', 'name', 'type', 'fileContent', 'fileType'])
 
       console.log('🔵 Upload request data:', { clientId, name, type, fileType, hasFileContent: !!fileContent })
 

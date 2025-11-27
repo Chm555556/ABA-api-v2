@@ -3,9 +3,7 @@ import Client from '#models/client'
 import User from '#models/user'
 import SessionLog from '#models/session_log'
 import Schedule from '#models/schedule'
-import Clinic from '#models/clinic'
 import Invoice from '#models/invoice'
-import Claim from '#models/claim'
 import db from '@adonisjs/lucid/services/db'
 import { DateTime } from 'luxon'
 // import { createClientValidator, createScheduleValidator } from '#validators/client_validator'
@@ -214,7 +212,7 @@ export default class ClinicController {
   /**
    * Test client creation
    */
-  async testClient({ auth, request, response }: HttpContext) {
+  async testClient({ auth, response }: HttpContext) {
     try {
       const user = auth.user!
       console.log('Test endpoint called by user:', user.id, 'clinic:', user.clinicId)
@@ -588,7 +586,7 @@ async createClient({ auth, request, response }: HttpContext) {
           cptCode: session.cptCode,
           serviceType: session.serviceType,
           status: session.status,
-          notes: session.notes,
+          notes: session.sessionNotes,
           createdAt: session.createdAt.toISO(),
         })),
         meta: sessions.getMeta(),
@@ -1040,6 +1038,8 @@ async createSchedule({ auth, request, response }: HttpContext) {
       // Group sessions by client for billing
       const billingData = sessions.reduce((acc: any, session) => {
         const clientId = session.clientId
+        if (!clientId) return acc
+        
         if (!acc[clientId]) {
           acc[clientId] = {
             client: {
@@ -1121,8 +1121,8 @@ async createSchedule({ auth, request, response }: HttpContext) {
         bcbaId: sessions[0].bcbaId,
         clinicId: user.clinicId!,
         sessionIds: sessionIds,
-        periodStart: new Date(periodStart),
-        periodEnd: new Date(periodEnd),
+        periodStart: DateTime.fromJSDate(new Date(periodStart)),
+        periodEnd: DateTime.fromJSDate(new Date(periodEnd)),
         sessionCount: sessions.length,
         totalHours,
         amount,
@@ -1459,7 +1459,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
               id: `doc_${client.id}_1`,
               name: `${client.firstName}_Assessment_Report.pdf`,
               type: 'assessment',
-              uploadDate: client.createdAt.toISOString(),
+              uploadDate: client.createdAt.toISO(),
               uploadedBy: client.bcba?.name || 'System',
               fileSize: 1024 * 1024 * 2.5, // 2.5MB
               fileType: 'application/pdf',
@@ -1469,7 +1469,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
               id: `doc_${client.id}_2`,
               name: `${client.firstName}_Insurance_Card.jpg`,
               type: 'insurance',
-              uploadDate: client.createdAt.toISOString(),
+              uploadDate: client.createdAt.toISO(),
               uploadedBy: 'Parent Portal',
               fileSize: 1024 * 512, // 512KB
               fileType: 'image/jpeg',
@@ -1533,7 +1533,7 @@ async createSchedule({ auth, request, response }: HttpContext) {
               duration: session.duration,
               rbtName: session.rbt?.name || 'Unknown',
               status: session.status,
-              notes: session.notes,
+              notes: session.sessionNotes,
             })),
           }
         })
@@ -1554,10 +1554,10 @@ async createSchedule({ auth, request, response }: HttpContext) {
   /**
    * Download document
    */
-  async downloadDocument({ auth, params, response }: HttpContext) {
+  async downloadDocument({ response }: HttpContext) {
     try {
-      const user = auth.user!
-      const documentId = params.id
+      // const user = auth.user!
+      // const documentId = params.id
 
       // In a real app, you would:
       // 1. Verify the document exists and belongs to a client in this clinic
@@ -1652,6 +1652,34 @@ async createSchedule({ auth, request, response }: HttpContext) {
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to generate report',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get all clinics
+   */
+  async getClinics({ response }: HttpContext) {
+    try {
+      const Clinic = (await import('#models/clinic')).default
+      const clinics = await Clinic.query().orderBy('name', 'asc')
+
+      return response.json({
+        data: clinics.map(clinic => ({
+          id: clinic.id,
+          name: clinic.name,
+          street: clinic.street,
+          city: clinic.city,
+          state: clinic.state,
+          zipCode: clinic.zipCode,
+          phone: clinic.phone,
+          email: clinic.email,
+        })),
+      })
+    } catch (error: any) {
+      return response.status(500).json({
+        message: 'Failed to fetch clinics',
         error: error.message,
       })
     }

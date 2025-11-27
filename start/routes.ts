@@ -21,6 +21,7 @@ const MessagesController = () => import('#controllers/messages_controller')
 const SchedulesController = () => import('#controllers/schedules_controller')
 const TreatmentGoalsController = () => import('#controllers/treatment_goals_controller')
 const DocumentsController = () => import('#controllers/documents_controller')
+const SessionsController = () => import('#controllers/sessions_controller')
 
 // Health check route
 router.get('/health', async ({ response }) => {
@@ -38,6 +39,8 @@ router.group(() => {
   router.group(() => {
     router.post('/register', [AuthController, 'register'])
     router.post('/login', [AuthController, 'login'])
+    router.post('/forgot-password', [AuthController, 'forgotPassword'])
+    router.post('/reset-password', [AuthController, 'resetPassword'])
   }).prefix('/auth')
 
   // Protected routes
@@ -53,7 +56,11 @@ router.group(() => {
     router.group(() => {
       router.get('/dashboard', [AdminController, 'dashboard'])
       router.get('/stats', [AdminController, 'getStats'])
+      
+      // Clinic management
       router.get('/clinics', [AdminController, 'getClinics'])
+      router.post('/clinics', [AdminController, 'createClinic'])
+      router.put('/clinics/:id', [AdminController, 'updateClinic'])
       
       // User management
       router.get('/users', [AdminController, 'getUsers'])
@@ -67,6 +74,7 @@ router.group(() => {
       
       // Session management
       router.get('/sessions', [AdminController, 'getSessions'])
+      router.get('/sessions/:id', [AdminController, 'getSession'])
       router.post('/sessions', [AdminController, 'createSession'])
     }).prefix('/admin').use(middleware.role({ roles: ['ADMIN'] }))
 
@@ -87,7 +95,15 @@ router.group(() => {
     router.group(() => {
       router.get('/dashboard', [BCBAController, 'dashboard'])
       router.get('/clients', [BCBAController, 'getClients'])
+      router.get('/clients/:id', [BCBAController, 'getClient'])
+      router.post('/clients', [BCBAController, 'createClient'])
+      router.put('/clients/:id', [BCBAController, 'updateClient'])
+      router.delete('/clients/:id', [BCBAController, 'deleteClient'])
+      router.get('/clinics', [ClinicController, 'getClinics'])
+      router.get('/schedule', [BCBAController, 'getSchedule'])
       router.get('/sessions/pending', [BCBAController, 'getPendingSessions'])
+      router.get('/sessions/:id', [BCBAController, 'getSessionDetails'])
+      router.post('/sessions', [BCBAController, 'createSession'])
       router.put('/sessions/:id/review', [BCBAController, 'reviewSession'])
       router.get('/treatment-goals', [BCBAController, 'getTreatmentGoals'])
       router.post('/treatment-goals', [BCBAController, 'createTreatmentGoal'])
@@ -116,6 +132,9 @@ router.group(() => {
     // Clinic routes
     router.group(() => {
       router.get('/dashboard', [ClinicController, 'dashboard'])
+      
+      // Clinic list
+      router.get('/clinics', [ClinicController, 'getClinics'])
       
       // Client management
       router.get('/clients', [ClinicController, 'getClients'])
@@ -152,6 +171,13 @@ router.group(() => {
 
     // Common routes for all authenticated users
     router.group(() => {
+      // Sessions (all roles can manage sessions)
+      router.get('/sessions/clients-for-group', [SessionsController, 'getClientsForGroupSession'])
+      router.get('/sessions/rbt/schedule', [SessionsController, 'getRbtSchedule'])
+      router.post('/sessions/check-overlap', [SessionsController, 'checkOverlap'])
+      router.post('/sessions', [SessionsController, 'create'])
+      router.get('/sessions/:id', [SessionsController, 'show'])
+      
       // Messages (all roles can send/receive messages)
       router.get('/messages', [MessagesController, 'index'])
       router.post('/messages', [MessagesController, 'store'])

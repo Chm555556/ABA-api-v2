@@ -107,6 +107,10 @@ export default class Client extends BaseModel {
     pivotForeignKey: 'client_id',
     relatedKey: 'id',
     pivotRelatedForeignKey: 'rbt_id',
+    pivotTimestamps: {
+      createdAt: 'assigned_at',
+      updatedAt: false,
+    },
   })
   declare assignedRbts: ManyToMany<typeof User>
 

@@ -1,7 +1,7 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import Schedule from '#models/schedule'
 import Client from '#models/client'
-import User from '#models/user'
+import { DateTime } from 'luxon'
 
 export default class SchedulesController {
   /**
@@ -134,7 +134,7 @@ export default class SchedulesController {
         clientId: client.id,
         rbtId,
         bcbaId,
-        date: new Date(date),
+        date: DateTime.fromJSDate(new Date(date)),
         startTime,
         endTime,
         location,
@@ -313,6 +313,8 @@ export default class SchedulesController {
       // Group by date
       const calendar = schedules.reduce((acc: any, schedule) => {
         const dateKey = schedule.date.toISODate()
+        if (!dateKey) return acc
+        
         if (!acc[dateKey]) {
           acc[dateKey] = []
         }

@@ -1363,21 +1363,6 @@ export default class AdminController {
   }
 
   /**
-   * 🏥 Get all clinics
-   */
-  async getClinics({ response }: HttpContext) {
-    try {
-      const clinics = await Clinic.query().orderBy('name', 'asc')
-      return response.json({ data: clinics })
-    } catch (error) {
-      return response.status(500).json({
-        message: 'Failed to fetch clinics',
-        error: error.message,
-      })
-    }
-  }
-
-  /**
    * 👶 Get all clients
    */
   async getClients({ request, response }: HttpContext) {
@@ -1469,14 +1454,141 @@ export default class AdminController {
       const limit = request.input('limit', 10)
       const status = request.input('status')
 
-      let query = SessionLog.query().preload('client').preload('rbt').preload('bcba')
+      let query = SessionLog.query()
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
+      
       if (status) query = query.where('status', status)
 
       const sessions = await query.orderBy('created_at', 'desc').paginate(page, limit)
-      return response.json({ data: sessions.all(), meta: sessions.getMeta() })
+      
+      // Format the response to include participant count
+      const formattedSessions = sessions.all().map((session) => {
+        const sessionData = session.toJSON()
+        return {
+          ...sessionData,
+          participantCount: session.sessionType !== 'one_to_one' 
+            ? session.participants?.length || 0 
+            : 1,
+        }
+      })
+      
+      return response.json({ data: formattedSessions, meta: sessions.getMeta() })
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch sessions',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🔍 Get single session with full details (Admin)
+   */
+  async getSession({ params, response }: HttpContext) {
+    try {
+      const session = await SessionLog.query()
+        .where('id', params.id)
+        .preload('client', (clientQuery) => {
+          clientQuery.preload('clinic').preload('bcba')
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client', (clientQuery) => {
+            clientQuery.preload('clinic')
+          })
+        })
+        .firstOrFail()
+
+      // Get all occurrences if this is a recurring session
+      let allOccurrences: any[] = []
+      if (session.isRecurring) {
+        const occurrencesQuery = session.isSeriesMaster
+          ? SessionLog.query().where('parent_session_id', session.id).orWhere('id', session.id)
+          : SessionLog.query().where('parent_session_id', session.parentSessionId || session.id).orWhere('id', session.parentSessionId || session.id)
+        
+        const occurrences = await occurrencesQuery
+          .select('id', 'date', 'start_time', 'end_time', 'occurrence_number')
+          .orderBy('occurrence_number', 'asc')
+        
+        allOccurrences = occurrences.map((occ) => ({
+          id: occ.id,
+          date: occ.date instanceof DateTime ? occ.date.toISODate() : occ.date,
+          startTime: occ.startTime,
+          endTime: occ.endTime,
+          occurrenceNumber: occ.occurrenceNumber,
+        }))
+      }
+
+      // Format the response with full details
+      const sessionData = {
+        id: session.id,
+        sessionType: session.sessionType,
+        clientId: session.clientId,
+        client: session.client ? {
+          id: session.client.id,
+          name: session.client.fullName,
+          fullName: session.client.fullName,
+          age: session.client.age,
+          diagnosis: session.client.diagnosis,
+          parentName: session.client.emergencyContactName,
+          parentPhone: session.client.emergencyContactPhone,
+          clinicName: session.client.clinic?.name || 'N/A',
+        } : null,
+        rbtId: session.rbtId,
+        rbt: {
+          id: session.rbt.id,
+          name: session.rbt.name,
+          email: session.rbt.email,
+        },
+        bcbaId: session.bcbaId,
+        bcba: {
+          id: session.bcba.id,
+          name: session.bcba.name,
+          email: session.bcba.email,
+        },
+        date: session.date instanceof DateTime ? session.date.toISODate() : session.date,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        duration: session.duration,
+        totalHours: session.totalHours,
+        location: session.location,
+        locationAddress: session.locationAddress,
+        sessionNotes: session.sessionNotes,
+        status: session.status,
+        isRecurring: session.isRecurring,
+        recurrencePattern: session.recurrencePattern,
+        recurrenceDays: session.recurrenceDays,
+        recurrenceEndDate: session.recurrenceEndDate instanceof DateTime ? session.recurrenceEndDate.toISODate() : session.recurrenceEndDate,
+        recurrenceCount: session.recurrenceCount,
+        isSeriesMaster: session.isSeriesMaster,
+        occurrenceNumber: session.occurrenceNumber,
+        parentSessionId: session.parentSessionId,
+        allOccurrences,
+        participantCount: session.sessionType !== 'one_to_one' 
+          ? session.participants?.length || 0 
+          : 1,
+        participants: session.participants?.map((participant) => ({
+          id: participant.id,
+          clientId: participant.clientId,
+          clientName: participant.client?.fullName || `Client ${participant.clientId}`,
+          clientAge: participant.client?.age,
+          parentName: participant.client?.emergencyContactName || 'N/A',
+          parentPhone: participant.client?.emergencyContactPhone || 'N/A',
+          clinicName: participant.client?.clinic?.name || 'N/A',
+        })) || [],
+      }
+
+      return response.json(sessionData)
+    } catch (error) {
+      console.error('Error fetching session:', error)
+      return response.status(404).json({
+        message: 'Session not found',
         error: error.message,
       })
     }
@@ -1579,6 +1691,115 @@ export default class AdminController {
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch system stats',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🏥 Get all clinics
+   */
+  async getClinics({ response }: HttpContext) {
+    try {
+      const clinics = await Clinic.query().orderBy('name', 'asc')
+
+      return response.json({
+        data: clinics.map(clinic => ({
+          id: clinic.id,
+          name: clinic.name,
+          street: clinic.street,
+          city: clinic.city,
+          state: clinic.state,
+          zipCode: clinic.zipCode,
+          phone: clinic.phone,
+          email: clinic.email,
+          npiNumber: clinic.npiNumber,
+          taxId: clinic.taxId,
+          isActive: clinic.isActive,
+          createdAt: clinic.createdAt.toISO(),
+        }))
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch clinics',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🏥 Create a new clinic
+   */
+  async createClinic({ request, response }: HttpContext) {
+    try {
+      const data = request.only([
+        'name',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'npiNumber',
+        'taxId',
+      ])
+
+      const clinic = await Clinic.create({
+        ...data,
+        isActive: true,
+      })
+
+      return response.status(201).json({
+        message: 'Clinic created successfully',
+        data: {
+          id: clinic.id,
+          name: clinic.name,
+          email: clinic.email,
+          createdAt: clinic.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to create clinic',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * 🏥 Update a clinic
+   */
+  async updateClinic({ params, request, response }: HttpContext) {
+    try {
+      const clinic = await Clinic.findOrFail(params.id)
+      
+      const data = request.only([
+        'name',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'npiNumber',
+        'taxId',
+      ])
+
+      clinic.merge(data)
+      await clinic.save()
+
+      return response.json({
+        message: 'Clinic updated successfully',
+        data: {
+          id: clinic.id,
+          name: clinic.name,
+          email: clinic.email,
+          updatedAt: clinic.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to update clinic',
         error: error.message,
       })
     }
