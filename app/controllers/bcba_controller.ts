@@ -7,6 +7,7 @@ import TreatmentGoal from '#models/treatment_goal'
 import ProgressReport from '#models/progress_report'
 import GoalProgress from '#models/goal_progress'
 import BehaviorData from '#models/behavior_data'
+import db from '@adonisjs/lucid/services/db'
 
 export default class BCBAController {
   /**
@@ -116,6 +117,81 @@ export default class BCBAController {
   }
 
   /**
+   * Get single client details
+   */
+  async getClient({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const clientId = params.id
+
+      const client = await Client.query()
+        .where('id', clientId)
+        .where('assigned_bcba', user.id)
+        .preload('bcba')
+        .preload('assignedRbts')
+        .preload('clinic')
+        .preload('treatmentGoals', (goalsQuery) => {
+          goalsQuery.where('status', 'active')
+        })
+        .firstOrFail()
+
+      console.log('🔍 getClient - Client ID:', client.id)
+      console.log('🔍 getClient - Assigned RBTs count:', client.assignedRbts.length)
+      console.log('🔍 getClient - Assigned RBTs:', client.assignedRbts.map(r => ({ id: r.id, name: r.name })))
+
+      return response.json({
+        data: {
+          id: client.id,
+          fullName: client.fullName,
+          firstName: client.firstName,
+          lastName: client.lastName,
+          age: client.age,
+          dateOfBirth: client.dateOfBirth.toISODate(),
+          status: client.status,
+          insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
+          phone: client.phone,
+          email: client.email,
+          street: client.street,
+          city: client.city,
+          state: client.state,
+          zipCode: client.zipCode,
+          emergencyContactName: client.emergencyContactName,
+          emergencyContactPhone: client.emergencyContactPhone,
+          emergencyContactRelationship: client.emergencyContactRelationship,
+          diagnosis: client.diagnosis,
+          bcbaName: client.bcba?.name || 'Not assigned',
+          assignedRbts: client.assignedRbts.map(rbt => ({
+            id: rbt.id,
+            name: rbt.name,
+            email: rbt.email,
+          })),
+          clinic: client.clinic ? {
+            id: client.clinic.id,
+            name: client.clinic.name,
+            street: client.clinic.street,
+            city: client.clinic.city,
+            state: client.clinic.state,
+          } : null,
+          treatmentGoals: client.treatmentGoals.map(goal => ({
+            id: goal.id,
+            title: goal.title,
+            status: goal.status,
+            measurementType: goal.measurementType,
+          })),
+          admissionDate: client.admissionDate.toISODate(),
+          createdAt: client.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      return response.status(404).json({
+        message: 'Client not found or access denied',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
    * Get assigned clients
    */
   async getClients({ auth, response }: HttpContext) {
@@ -129,6 +205,11 @@ export default class BCBAController {
           goalsQuery.where('status', 'active')
         })
         .orderBy('first_name', 'asc')
+
+      console.log('🔍 getClients - Total clients:', clients.length)
+      clients.forEach(c => {
+        console.log(`🔍 Client ${c.id} (${c.fullName}) - RBTs:`, c.assignedRbts.length, c.assignedRbts.map(r => r.name))
+      })
 
       return response.json({
         data: clients.map(client => ({
@@ -1314,5 +1395,423 @@ export default class BCBAController {
 
     console.log(`✅ Created ${occurrences.length} recurring occurrences`)
     return occurrences
+  }
+
+  /**
+   * Update client
+   */
+  async updateClient({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const clientId = params.id
+
+      console.log('📝 BCBA updating client:', clientId, 'by user:', user.id)
+
+      // Find client and verify BCBA has access
+      const client = await Client.query()
+        .where('id', clientId)
+        .where('assigned_bcba', user.id)
+        .firstOrFail()
+
+      console.log('✅ Client found:', client.fullName)
+
+      const clientData = request.only([
+        'firstName',
+        'lastName',
+        'dateOfBirth',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'emergencyContactName',
+        'emergencyContactRelationship',
+        'emergencyContactPhone',
+        'insuranceType',
+        'insuranceId',
+        'diagnosis',
+        'status',
+        'clinicId',
+        'assignedRbts',
+      ])
+
+      console.log('📝 Update data received:', clientData)
+
+      // Parse date of birth if provided
+      if (clientData.dateOfBirth) {
+        let parsedDate: DateTime
+        try {
+          if (clientData.dateOfBirth instanceof Date) {
+            parsedDate = DateTime.fromJSDate(clientData.dateOfBirth)
+          } else {
+            parsedDate = DateTime.fromISO(String(clientData.dateOfBirth))
+          }
+
+          if (!parsedDate.isValid) {
+            throw new Error(`Invalid date: ${clientData.dateOfBirth}`)
+          }
+          clientData.dateOfBirth = parsedDate
+        } catch (dateError) {
+          console.error('❌ Date parsing error:', dateError)
+          return response.status(400).json({
+            success: false,
+            message: 'Invalid date format. Expected YYYY-MM-DD',
+            error: 'INVALID_DATE',
+          })
+        }
+      }
+
+      // Update client fields
+      client.merge({
+        firstName: clientData.firstName || client.firstName,
+        lastName: clientData.lastName || client.lastName,
+        dateOfBirth: clientData.dateOfBirth || client.dateOfBirth,
+        phone: clientData.phone !== undefined ? clientData.phone : client.phone,
+        email: clientData.email !== undefined ? clientData.email : client.email,
+        insuranceType: clientData.insuranceType || client.insuranceType,
+        insuranceId: clientData.insuranceId !== undefined ? clientData.insuranceId : client.insuranceId,
+        status: clientData.status || client.status,
+        street: clientData.street !== undefined ? clientData.street : client.street,
+        city: clientData.city !== undefined ? clientData.city : client.city,
+        state: clientData.state !== undefined ? clientData.state : client.state,
+        zipCode: clientData.zipCode !== undefined ? clientData.zipCode : client.zipCode,
+        emergencyContactName: clientData.emergencyContactName !== undefined ? clientData.emergencyContactName : client.emergencyContactName,
+        emergencyContactRelationship: clientData.emergencyContactRelationship !== undefined ? clientData.emergencyContactRelationship : client.emergencyContactRelationship,
+        emergencyContactPhone: clientData.emergencyContactPhone !== undefined ? clientData.emergencyContactPhone : client.emergencyContactPhone,
+        diagnosis: clientData.diagnosis !== undefined ? clientData.diagnosis : client.diagnosis,
+        clinicId: clientData.clinicId !== undefined ? clientData.clinicId : client.clinicId,
+      })
+
+      await client.save()
+
+      console.log('✅ Client updated successfully')
+
+      // Update RBT assignments if provided
+      if (clientData.assignedRbts !== undefined) {
+        try {
+          console.log('🔵 Updating RBT assignments:', clientData.assignedRbts)
+          console.log('🔵 Client ID:', client.id)
+          
+          // Remove existing RBT assignments
+          const deleteResult = await db.rawQuery('DELETE FROM client_rbts WHERE client_id = ?', [client.id])
+          console.log('🔵 Deleted existing RBT assignments:', deleteResult)
+          
+          // Add new RBT assignments
+          if (Array.isArray(clientData.assignedRbts) && clientData.assignedRbts.length > 0) {
+            console.log('🔵 Looking for RBTs with IDs:', clientData.assignedRbts)
+            
+            const rbts = await User.query()
+              .whereIn('id', clientData.assignedRbts)
+              .where('role', 'RBT')
+            
+            console.log('🔵 Found RBTs:', rbts.map(r => ({ id: r.id, name: r.name, role: r.role })))
+            
+            if (rbts.length > 0) {
+              const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+              
+              for (const rbtId of clientData.assignedRbts) {
+                const rbt = rbts.find(r => r.id === rbtId)
+                if (rbt) {
+                  console.log('🔵 Inserting RBT assignment:', { clientId: client.id, rbtId, now })
+                  const insertResult = await db.rawQuery(
+                    'INSERT INTO client_rbts (client_id, rbt_id, assigned_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+                    [client.id, rbtId, now, now, now]
+                  )
+                  console.log('🔵 Insert result:', insertResult)
+                } else {
+                  console.warn('⚠️ RBT ID not found in valid RBTs:', rbtId)
+                }
+              }
+              
+              console.log('✅ RBT assignments updated successfully')
+            } else {
+              console.warn('⚠️ No valid RBTs found for IDs:', clientData.assignedRbts)
+            }
+          } else {
+            console.log('🔵 No RBTs to assign (empty or not array)')
+          }
+        } catch (rbtError) {
+          console.error('⚠️ RBT assignment update failed (non-fatal):', rbtError)
+          console.error('⚠️ Error stack:', rbtError.stack)
+        }
+      } else {
+        console.log('🔵 assignedRbts is undefined, skipping RBT update')
+      }
+
+      // Reload relationships to get fresh data (especially assignedRbts after update)
+      await client.refresh()
+      await client.load('bcba')
+      await client.load('assignedRbts')
+      
+      console.log('🔍 updateClient - After reload, RBTs:', client.assignedRbts.length, client.assignedRbts.map(r => ({ id: r.id, name: r.name })))
+
+      return response.json({
+        success: true,
+        message: 'Client updated successfully',
+        data: {
+          id: client.id,
+          fullName: client.fullName,
+          firstName: client.firstName,
+          lastName: client.lastName,
+          dateOfBirth: client.dateOfBirth.toISODate(),
+          age: client.age,
+          status: client.status,
+          insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
+          clinicId: client.clinicId,
+          bcbaName: client.bcba?.name || 'Not assigned',
+          assignedRbts: client.assignedRbts.map(rbt => ({
+            id: rbt.id,
+            name: rbt.name,
+            email: rbt.email,
+          })),
+          admissionDate: client.admissionDate.toISODate(),
+          createdAt: client.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Update client error:', error)
+      return response.status(404).json({
+        success: false,
+        message: 'Client not found or access denied',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Delete client
+   */
+  async deleteClient({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const clientId = params.id
+
+      console.log('🗑️ BCBA deleting client:', clientId, 'by user:', user.id)
+
+      // Find client and verify BCBA has access
+      const client = await Client.query()
+        .where('id', clientId)
+        .where('assigned_bcba', user.id)
+        .firstOrFail()
+
+      console.log('✅ Client found:', client.fullName)
+
+      // Delete the client (cascade deletes should handle related records)
+      await client.delete()
+
+      console.log('✅ Client deleted successfully')
+
+      return response.json({
+        success: true,
+        message: 'Client deleted successfully',
+      })
+    } catch (error) {
+      console.error('❌ Delete client error:', error)
+      return response.status(404).json({
+        success: false,
+        message: 'Client not found or access denied',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Create new client (BCBA can create clients)
+   */
+  async createClient({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      
+      console.log('🔵 BCBA createClient called by user:', user.id, 'clinic:', user.clinicId)
+      console.log('🔵 Request body:', JSON.stringify(request.all(), null, 2))
+      
+      // Check if user has a clinic assigned
+      if (!user.clinicId) {
+        console.error('❌ BCBA does not have a clinic assigned:', user.id, user.email)
+        return response.status(400).json({
+          success: false,
+          message: 'Your account is not associated with a clinic. Please contact your administrator.',
+          error: 'CLINIC_NOT_ASSIGNED',
+        })
+      }
+
+      const clientData = request.only([
+        'firstName',
+        'lastName',
+        'dateOfBirth',
+        'street',
+        'city',
+        'state',
+        'zipCode',
+        'phone',
+        'email',
+        'emergencyContactName',
+        'emergencyContactRelationship',
+        'emergencyContactPhone',
+        'insuranceType',
+        'insuranceId',
+        'diagnosis',
+        'clinicId',
+        'assignedRbts',
+        'parentName',
+        'parentEmail',
+        'parentPhone',
+        'parentRelationship',
+      ])
+
+      console.log('🔵 Client data received:', clientData)
+
+      // Parse date of birth
+      let parsedDate: DateTime
+      try {
+        if (clientData.dateOfBirth instanceof Date) {
+          parsedDate = DateTime.fromJSDate(clientData.dateOfBirth)
+        } else {
+          parsedDate = DateTime.fromISO(String(clientData.dateOfBirth))
+        }
+
+        if (!parsedDate.isValid) {
+          throw new Error(`Invalid date: ${clientData.dateOfBirth}`)
+        }
+        console.log('🔵 Parsed date of birth:', parsedDate.toISODate())
+      } catch (dateError) {
+        console.error('❌ Date parsing error:', dateError)
+        return response.status(400).json({
+          success: false,
+          message: 'Invalid date format. Expected YYYY-MM-DD',
+          error: 'INVALID_DATE',
+        })
+      }
+
+      console.log('🔵 Creating client with clinicId:', clientData.clinicId || user.clinicId)
+
+      // Create the client
+      const client = await Client.create({
+        firstName: clientData.firstName,
+        lastName: clientData.lastName,
+        dateOfBirth: parsedDate,
+        clinicId: clientData.clinicId || user.clinicId, // Use provided clinicId or user's clinicId
+        assignedBcba: user.id, // Assign the creating BCBA
+        status: 'active',
+        admissionDate: DateTime.now(),
+        // Required fields with defaults
+        street: clientData.street || 'Not provided',
+        city: clientData.city || 'Not provided',
+        state: clientData.state || 'Not provided',
+        zipCode: clientData.zipCode || '00000',
+        phone: clientData.phone || 'Not provided',
+        emergencyContactName: clientData.emergencyContactName || 'Not provided',
+        emergencyContactRelationship: clientData.emergencyContactRelationship || 'Not provided',
+        emergencyContactPhone: clientData.emergencyContactPhone || 'Not provided',
+        insuranceType: clientData.insuranceType,
+        insuranceId: clientData.insuranceId || 'Not provided',
+        // Optional fields
+        email: clientData.email || null,
+        diagnosis: clientData.diagnosis || null,
+      })
+
+      console.log('🔵 Client created successfully:', client.id)
+
+      // Assign RBTs if provided (optional - won't fail client creation if this fails)
+      if (clientData.assignedRbts && Array.isArray(clientData.assignedRbts) && clientData.assignedRbts.length > 0) {
+        try {
+          console.log('🔵 Assigning RBTs:', clientData.assignedRbts)
+          console.log('🔵 RBT IDs type:', typeof clientData.assignedRbts[0])
+          
+          // Verify RBTs exist and are RBTs (removed supervisor check)
+          const rbts = await User.query()
+            .whereIn('id', clientData.assignedRbts)
+            .where('role', 'RBT')
+          
+          console.log('🔵 Found RBTs:', rbts.map(r => ({ id: r.id, name: r.name, role: r.role })))
+          
+          if (rbts.length === 0) {
+            console.warn('⚠️ No RBTs found with provided IDs:', clientData.assignedRbts)
+            console.warn('⚠️ Checking all users with these IDs...')
+            const allUsers = await User.query().whereIn('id', clientData.assignedRbts)
+            console.warn('⚠️ Found users:', allUsers.map(u => ({ id: u.id, name: u.name, role: u.role })))
+          } else {
+            if (rbts.length !== clientData.assignedRbts.length) {
+              console.warn('⚠️ Some provided IDs are not valid RBTs')
+              console.warn('⚠️ Requested:', clientData.assignedRbts)
+              console.warn('⚠️ Found:', rbts.map(r => r.id))
+            }
+            
+            // Use raw SQL to insert into pivot table with assigned_at timestamp
+            const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+            
+            for (const rbtId of clientData.assignedRbts) {
+              // Check if this RBT exists in the valid RBTs list
+              if (rbts.find(r => r.id === rbtId)) {
+                console.log('🔵 Inserting RBT assignment:', { clientId: client.id, rbtId, now })
+                const result = await db.rawQuery(
+                  'INSERT INTO client_rbts (client_id, rbt_id, assigned_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+                  [client.id, rbtId, now, now, now]
+                )
+                console.log('🔵 Insert result:', result)
+              } else {
+                console.warn('⚠️ Skipping RBT ID (not in valid list):', rbtId)
+              }
+            }
+            
+            console.log('✅ RBTs assigned successfully')
+          }
+        } catch (rbtError) {
+          console.error('⚠️ RBT assignment failed (non-fatal):', rbtError)
+          console.error('⚠️ Error stack:', rbtError.stack)
+          // Continue anyway - client was created successfully
+        }
+      } else {
+        console.log('🔵 No RBTs to assign:', {
+          hasAssignedRbts: !!clientData.assignedRbts,
+          isArray: Array.isArray(clientData.assignedRbts),
+          length: clientData.assignedRbts?.length
+        })
+      }
+
+      // Load relationships
+      await client.load('bcba')
+      await client.load('assignedRbts')
+
+      return response.status(201).json({
+        success: true,
+        message: 'Client created successfully',
+        data: {
+          id: client.id,
+          fullName: client.fullName,
+          firstName: client.firstName,
+          lastName: client.lastName,
+          dateOfBirth: client.dateOfBirth.toISODate(),
+          age: client.age,
+          status: client.status,
+          insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
+          clinicId: client.clinicId,
+          bcbaName: client.bcba?.name || 'Not assigned',
+          assignedRbts: client.assignedRbts.map(rbt => ({
+            id: rbt.id,
+            name: rbt.name,
+            email: rbt.email,
+          })),
+          admissionDate: client.admissionDate.toISODate(),
+          createdAt: client.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ BCBA createClient error:', error)
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+      })
+      
+      return response.status(400).json({
+        success: false,
+        message: 'Failed to create client',
+        error: error.message,
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      })
+    }
   }
 }
