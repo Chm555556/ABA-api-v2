@@ -838,4 +838,203 @@ export default class BCBAController {
       })
     }
   }
+
+  /**
+   * Get all sessions/schedule for BCBA's supervised RBTs
+   */
+  async getSchedule({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const startDate = request.input('startDate')
+      const endDate = request.input('endDate')
+      const limit = request.input('limit', 1000)
+
+      console.log(`🔍 BCBA Schedule Request:`)
+      console.log(`   User ID: ${user.id}`)
+      console.log(`   User Role: ${user.role}`)
+      console.log(`   Date Range: ${startDate} to ${endDate}`)
+
+      // Build query for sessions where BCBA is assigned
+      let query = SessionLog.query()
+        .where('bcba_id', user.id)
+        .preload('client')
+        .preload('rbt')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
+
+      if (startDate) {
+        query = query.where('date', '>=', startDate)
+      }
+
+      if (endDate) {
+        query = query.where('date', '<=', endDate)
+      }
+
+      const sessions = await query
+        .orderBy('date', 'asc')
+        .orderBy('start_time', 'asc')
+        .limit(limit)
+
+      console.log(`✅ Found ${sessions.length} sessions for BCBA ${user.id}`)
+
+      return response.json({
+        data: sessions.map(session => ({
+          id: session.id,
+          sessionType: session.sessionType,
+          clientId: session.clientId,
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : null,
+          rbtId: session.rbtId,
+          rbtName: session.rbt.name,
+          bcbaId: session.bcbaId,
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          time: `${session.startTime} - ${session.endTime}`,
+          duration: session.duration,
+          location: session.location,
+          locationAddress: session.locationAddress,
+          status: session.status,
+          notes: session.sessionNotes,
+          isRecurring: session.isRecurring,
+          recurrencePattern: session.recurrencePattern,
+          participantCount: session.sessionType !== 'one_to_one' 
+            ? session.participants?.length || 0 
+            : 1,
+          participants: session.participants?.map((p) => ({
+            id: p.id,
+            clientId: p.clientId,
+            clientName: p.client?.fullName || `Client ${p.clientId}`,
+          })) || [],
+        })),
+      })
+    } catch (error) {
+      return response.status(500).json({
+        message: 'Failed to fetch schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get single session details for BCBA
+   */
+  async getSessionDetails({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`🔍 BCBA Session Details Request:`)
+      console.log(`   User ID: ${user.id}`)
+      console.log(`   Session ID: ${sessionId}`)
+
+      // Get session with all relations
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('bcba_id', user.id) // Ensure BCBA has access
+        .preload('client')
+        .preload('rbt')
+        .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
+        .firstOrFail()
+
+      console.log(`✅ Found session ${sessionId} for BCBA ${user.id}`)
+
+      // Get all occurrences if this is a recurring session
+      let allOccurrences: any[] = []
+      if (session.isRecurring) {
+        const occurrencesQuery = session.isSeriesMaster
+          ? SessionLog.query().where('parent_session_id', session.id).orWhere('id', session.id)
+          : SessionLog.query().where('parent_session_id', session.parentSessionId || session.id).orWhere('id', session.parentSessionId || session.id)
+        
+        const occurrences = await occurrencesQuery
+          .where('bcba_id', user.id) // Ensure BCBA has access to all occurrences
+          .select('id', 'date', 'start_time', 'end_time', 'occurrence_number', 'status')
+          .orderBy('occurrence_number', 'asc')
+        
+        allOccurrences = occurrences.map((occ) => ({
+          id: occ.id,
+          date: occ.date instanceof DateTime ? occ.date.toISODate() : occ.date,
+          startTime: occ.startTime,
+          endTime: occ.endTime,
+          occurrenceNumber: occ.occurrenceNumber,
+          status: occ.status,
+        }))
+      }
+
+      return response.json({
+        id: session.id,
+        sessionType: session.sessionType,
+        clientId: session.clientId,
+        clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : null,
+        client: session.client ? {
+          id: session.client.id,
+          name: `${session.client.firstName} ${session.client.lastName}`,
+          fullName: session.client.fullName,
+          age: session.client.age,
+          dateOfBirth: session.client.dateOfBirth?.toISODate(),
+        } : null,
+        rbtId: session.rbtId,
+        rbtName: session.rbt.name,
+        rbt: {
+          id: session.rbt.id,
+          name: session.rbt.name,
+          email: session.rbt.email,
+        },
+        bcbaId: session.bcbaId,
+        bcbaName: session.bcba.name,
+        bcba: {
+          id: session.bcba.id,
+          name: session.bcba.name,
+          email: session.bcba.email,
+        },
+        date: session.date.toISODate(),
+        startTime: session.startTime,
+        endTime: session.endTime,
+        duration: session.duration,
+        totalHours: session.totalHours,
+        location: session.location,
+        locationAddress: session.locationAddress,
+        status: session.status,
+        sessionNotes: session.sessionNotes,
+        cptCode: session.cptCode,
+        serviceType: session.serviceType,
+        isRecurring: session.isRecurring,
+        recurrencePattern: session.recurrencePattern,
+        recurrenceDays: session.recurrenceDays,
+        recurrenceEndDate: session.recurrenceEndDate?.toISODate(),
+        recurrenceCount: session.recurrenceCount,
+        isSeriesMaster: session.isSeriesMaster,
+        occurrenceNumber: session.occurrenceNumber,
+        parentSessionId: session.parentSessionId,
+        allOccurrences,
+        participantCount: session.sessionType !== 'one_to_one' 
+          ? session.participants?.length || 0 
+          : 1,
+        participants: session.participants?.map((p) => ({
+          id: p.id,
+          clientId: p.clientId,
+          clientName: p.client?.fullName || `Client ${p.clientId}`,
+          client: p.client ? {
+            id: p.client.id,
+            name: p.client.fullName,
+            age: p.client.age,
+          } : null,
+        })) || [],
+        bcbaApproved: session.bcbaApproved,
+        bcbaApprovedAt: session.bcbaApprovedAt?.toISO(),
+        bcbaNotes: session.bcbaNotes,
+        createdAt: session.createdAt.toISO(),
+        updatedAt: session.updatedAt?.toISO(),
+      })
+    } catch (error) {
+      console.error(`❌ Error fetching session ${params.id}:`, error)
+      return response.status(404).json({
+        message: 'Session not found or access denied',
+        error: error.message,
+      })
+    }
+  }
 }

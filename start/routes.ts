@@ -95,7 +95,9 @@ router.group(() => {
     router.group(() => {
       router.get('/dashboard', [BCBAController, 'dashboard'])
       router.get('/clients', [BCBAController, 'getClients'])
+      router.get('/schedule', [BCBAController, 'getSchedule'])
       router.get('/sessions/pending', [BCBAController, 'getPendingSessions'])
+      router.get('/sessions/:id', [BCBAController, 'getSessionDetails'])
       router.put('/sessions/:id/review', [BCBAController, 'reviewSession'])
       router.get('/treatment-goals', [BCBAController, 'getTreatmentGoals'])
       router.post('/treatment-goals', [BCBAController, 'createTreatmentGoal'])

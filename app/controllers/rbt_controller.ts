@@ -440,10 +440,28 @@ export default class RBTController {
       const startDate = request.input('startDate')
       const endDate = request.input('endDate')
 
-      let query = Schedule.query()
+      console.log(`🔍 RBT Schedule Request:`)
+      console.log(`   User ID: ${user.id}`)
+      console.log(`   User Role: ${user.role}`)
+      console.log(`   User Name: ${user.name}`)
+      console.log(`   Date Range: ${startDate} to ${endDate}`)
+
+      // Verify user is RBT
+      if (user.role !== 'RBT') {
+        console.log(`❌ Access denied - User ${user.id} is not an RBT (role: ${user.role})`)
+        return response.status(403).json({
+          message: 'Access denied. Only RBT users can access this endpoint.',
+        })
+      }
+
+      // Load sessions from session_logs table instead of schedules
+      let query = SessionLog.query()
         .where('rbt_id', user.id)
         .preload('client')
         .preload('bcba')
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client')
+        })
 
       if (startDate) {
         query = query.where('date', '>=', startDate)
@@ -453,23 +471,44 @@ export default class RBTController {
         query = query.where('date', '<=', endDate)
       }
 
-      const schedules = await query
+      const sessions = await query
         .orderBy('date', 'asc')
         .orderBy('start_time', 'asc')
 
+      console.log(`✅ Found ${sessions.length} sessions for RBT ${user.id}`)
+      if (sessions.length > 0) {
+        console.log(`   Sample sessions:`)
+        sessions.slice(0, 3).forEach(s => {
+          console.log(`   - Session ${s.id}: RBT ${s.rbtId}, Date: ${s.date.toISODate()}, Client: ${s.client?.fullName || 'N/A'}`)
+        })
+      }
+
       return response.json({
-        data: schedules.map(schedule => ({
-          id: schedule.id,
-          clientId: schedule.clientId,
-          clientName: `${schedule.client.firstName} ${schedule.client.lastName}`,
-          bcbaName: schedule.bcba.name,
-          date: schedule.date.toISODate(),
-          startTime: schedule.startTime,
-          endTime: schedule.endTime,
-          time: schedule.time,
-          location: schedule.location,
-          status: schedule.status,
-          notes: schedule.notes,
+        data: sessions.map(session => ({
+          id: session.id,
+          sessionType: session.sessionType,
+          clientId: session.clientId,
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : null,
+          bcbaName: session.bcba.name,
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          time: `${session.startTime} - ${session.endTime}`,
+          duration: session.duration,
+          location: session.location,
+          locationAddress: session.locationAddress,
+          status: session.status,
+          notes: session.sessionNotes,
+          isRecurring: session.isRecurring,
+          recurrencePattern: session.recurrencePattern,
+          participantCount: session.sessionType !== 'one_to_one' 
+            ? session.participants?.length || 0 
+            : 1,
+          participants: session.participants?.map((p) => ({
+            id: p.id,
+            clientId: p.clientId,
+            clientName: p.client?.fullName || `Client ${p.clientId}`,
+          })) || [],
         })),
       })
     } catch (error) {
