@@ -113,6 +113,8 @@ router.group(() => {
       router.get('/supervision', [BCBAController, 'getSupervisionSchedule'])
       router.post('/supervision', [BCBAController, 'createSupervisionSession'])
       router.get('/users', [BCBAController, 'getUsers'])
+      router.get('/parents', [BCBAController, 'getParents'])
+      router.post('/parents', [BCBAController, 'createParent'])
     }).prefix('/bcba').use(middleware.role({ roles: ['BCBA'] }))
 
     // RBT routes

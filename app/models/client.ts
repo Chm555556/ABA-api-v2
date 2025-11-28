@@ -64,6 +64,9 @@ export default class Client extends BaseModel {
   declare assignedBcba: number | null
 
   @column()
+  declare parentId: number | null
+
+  @column()
   declare status: 'active' | 'inactive' | 'discharged'
 
   @column.date()
@@ -100,6 +103,11 @@ export default class Client extends BaseModel {
     foreignKey: 'assignedBcba',
   })
   declare bcba: BelongsTo<typeof User>
+
+  @belongsTo(() => User, {
+    foreignKey: 'parentId',
+  })
+  declare parent: BelongsTo<typeof User>
 
   @manyToMany(() => User, {
     pivotTable: 'client_rbts',
