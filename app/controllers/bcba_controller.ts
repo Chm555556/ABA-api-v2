@@ -201,6 +201,7 @@ export default class BCBAController {
       const clients = await Client.query()
         .where('assigned_bcba', user.id)
         .preload('assignedRbts')
+        .preload('parent')
         .preload('treatmentGoals', (goalsQuery) => {
           goalsQuery.where('status', 'active')
         })
@@ -221,6 +222,14 @@ export default class BCBAController {
           dateOfBirth: client.dateOfBirth.toISODate(),
           status: client.status,
           insuranceType: client.insuranceType,
+          phone: client.phone,
+          email: client.email,
+          parent: client.parent ? {
+            id: client.parent.id,
+            name: client.parent.name,
+            email: client.parent.email,
+            phone: client.parent.phone,
+          } : null,
           assignedRbts: client.assignedRbts.map(rbt => ({
             id: rbt.id,
             name: rbt.name,
@@ -228,13 +237,7 @@ export default class BCBAController {
           })),
           treatmentGoals: client.treatmentGoals.map(goal => ({
             id: goal.id,
-            title: goal.title,
-            status: goal.status,
-            measurementType: goal.measurementType,
-          })),
-          admissionDate: client.admissionDate.toISODate(),
-          createdAt: client.createdAt.toISO(),
-        })),
+            title: goal.title
       })
     } catch (error) {
       return response.status(500).json({
@@ -1013,11 +1016,15 @@ export default class BCBAController {
       const session = await SessionLog.query()
         .where('id', sessionId)
         .where('bcba_id', user.id) // Ensure BCBA has access
-        .preload('client')
+        .preload('client', (clientQuery) => {
+          clientQuery.preload('clinic')
+        })
         .preload('rbt')
         .preload('bcba')
         .preload('participants', (participantsQuery) => {
-          participantsQuery.preload('client')
+          participantsQuery.preload('client', (clientQuery) => {
+            clientQuery.preload('clinic')
+          })
         })
         .firstOrFail()
 
@@ -1056,6 +1063,8 @@ export default class BCBAController {
           fullName: session.client.fullName,
           age: session.client.age,
           dateOfBirth: session.client.dateOfBirth?.toISODate(),
+          diagnosis: session.client.diagnosis,
+          clinicName: session.client.clinic?.name,
         } : null,
         rbtId: session.rbtId,
         rbtName: session.rbt.name,
@@ -1098,6 +1107,8 @@ export default class BCBAController {
           id: p.id,
           clientId: p.clientId,
           clientName: p.client?.fullName || `Client ${p.clientId}`,
+          clientAge: p.client?.age,
+          clinicName: p.client?.clinic?.name,
           client: p.client ? {
             id: p.client.id,
             name: p.client.fullName,

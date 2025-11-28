@@ -64,6 +64,9 @@ export default class Client extends BaseModel {
   declare assignedBcba: number | null
 
   @column()
+  declare parentId: number | null
+
+  @column()
   declare status: 'active' | 'inactive' | 'discharged'
 
   @column.date()
