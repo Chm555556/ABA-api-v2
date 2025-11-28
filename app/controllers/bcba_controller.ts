@@ -1864,9 +1864,9 @@ export default class BCBAController {
    */
   async getParents({ response }: HttpContext) {
     try {
+      // Get all parents (including pending verification)
       const parents = await User.query()
         .where('role', 'PARENT')
-        .where('is_active', true)
         .orderBy('name', 'asc')
 
       return response.json({
@@ -1877,6 +1877,7 @@ export default class BCBAController {
           phone: parent.phone,
           address: parent.address,
           isActive: parent.isActive,
+          verified: parent.verified,
         }))
       })
     } catch (error) {
@@ -1925,7 +1926,7 @@ export default class BCBAController {
         })
       }
 
-      // Create parent user with full access
+      // Create parent user - pending admin verification
       const parent = await User.create({
         name,
         email,
@@ -1933,22 +1934,23 @@ export default class BCBAController {
         role: 'PARENT',
         phone: phone || null,
         address: address || null,
-        isActive: true,
-        verified: true, // Set to true so parent can log in immediately
+        isActive: false, // Set to false - admin must activate
+        verified: false, // Set to false - admin must verify
         permissions: [], // Parents have default permissions
       })
 
-      console.log('✅ Parent account created:', {
+      console.log('✅ Parent account created (pending verification):', {
         id: parent.id,
         name: parent.name,
         email: parent.email,
         role: parent.role,
-        verified: parent.verified
+        verified: parent.verified,
+        isActive: parent.isActive
       })
 
       return response.status(201).json({
         success: true,
-        message: 'Parent account created successfully. They can now log in to view their child\'s progress.',
+        message: 'Parent account created successfully. Pending admin verification before they can log in.',
         data: {
           id: parent.id,
           name: parent.name,
@@ -1956,6 +1958,7 @@ export default class BCBAController {
           phone: parent.phone,
           address: parent.address,
           isActive: parent.isActive,
+          verified: parent.verified,
         }
       })
     } catch (error) {
