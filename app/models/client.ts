@@ -104,6 +104,11 @@ export default class Client extends BaseModel {
   })
   declare bcba: BelongsTo<typeof User>
 
+  @belongsTo(() => User, {
+    foreignKey: 'parentId',
+  })
+  declare parent: BelongsTo<typeof User>
+
   @manyToMany(() => User, {
     pivotTable: 'client_rbts',
     localKey: 'id',

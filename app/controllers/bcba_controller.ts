@@ -128,6 +128,7 @@ export default class BCBAController {
         .where('id', clientId)
         .where('assigned_bcba', user.id)
         .preload('bcba')
+        .preload('parent')
         .preload('assignedRbts')
         .preload('clinic')
         .preload('treatmentGoals', (goalsQuery) => {
@@ -161,6 +162,15 @@ export default class BCBAController {
           emergencyContactRelationship: client.emergencyContactRelationship,
           diagnosis: client.diagnosis,
           bcbaName: client.bcba?.name || 'Not assigned',
+          parent: client.parent ? {
+            id: client.parent.id,
+            name: client.parent.name,
+            email: client.parent.email,
+            phone: client.parent.phone,
+            address: client.parent.address,
+            role: client.parent.role,
+            isActive: client.parent.isActive,
+          } : null,
           assignedRbts: client.assignedRbts.map(rbt => ({
             id: rbt.id,
             name: rbt.name,
@@ -200,6 +210,8 @@ export default class BCBAController {
 
       const clients = await Client.query()
         .where('assigned_bcba', user.id)
+        .preload('bcba')
+        .preload('clinic')
         .preload('assignedRbts')
         .preload('parent')
         .preload('treatmentGoals', (goalsQuery) => {
@@ -222,8 +234,27 @@ export default class BCBAController {
           dateOfBirth: client.dateOfBirth.toISODate(),
           status: client.status,
           insuranceType: client.insuranceType,
+          insuranceId: client.insuranceId,
           phone: client.phone,
           email: client.email,
+          street: client.street,
+          city: client.city,
+          state: client.state,
+          zipCode: client.zipCode,
+          emergencyContactName: client.emergencyContactName,
+          emergencyContactPhone: client.emergencyContactPhone,
+          emergencyContactRelationship: client.emergencyContactRelationship,
+          diagnosis: client.diagnosis,
+          admissionDate: client.admissionDate.toISODate(),
+          bcbaName: client.bcba?.name || 'Not assigned',
+          clinicId: client.clinicId,
+          clinic: client.clinic ? {
+            id: client.clinic.id,
+            name: client.clinic.name,
+            street: client.clinic.street,
+            city: client.clinic.city,
+            state: client.clinic.state,
+          } : null,
           parent: client.parent ? {
             id: client.parent.id,
             name: client.parent.name,
@@ -237,7 +268,9 @@ export default class BCBAController {
           })),
           treatmentGoals: client.treatmentGoals.map(goal => ({
             id: goal.id,
-            title: goal.title
+            title: goal.title,
+          })),
+        })),
       })
     } catch (error) {
       return response.status(500).json({
@@ -1444,6 +1477,7 @@ export default class BCBAController {
         'diagnosis',
         'status',
         'clinicId',
+        'parentId',
         'assignedRbts',
       ])
 
@@ -1492,6 +1526,7 @@ export default class BCBAController {
         emergencyContactPhone: clientData.emergencyContactPhone !== undefined ? clientData.emergencyContactPhone : client.emergencyContactPhone,
         diagnosis: clientData.diagnosis !== undefined ? clientData.diagnosis : client.diagnosis,
         clinicId: clientData.clinicId !== undefined ? clientData.clinicId : client.clinicId,
+        parentId: clientData.parentId !== undefined ? clientData.parentId : client.parentId,
       })
 
       await client.save()
@@ -1666,10 +1701,7 @@ export default class BCBAController {
         'diagnosis',
         'clinicId',
         'assignedRbts',
-        'parentName',
-        'parentEmail',
-        'parentPhone',
-        'parentRelationship',
+        'parentId',
       ])
 
       console.log('🔵 Client data received:', clientData)
@@ -1705,6 +1737,7 @@ export default class BCBAController {
         dateOfBirth: parsedDate,
         clinicId: clientData.clinicId || user.clinicId, // Use provided clinicId or user's clinicId
         assignedBcba: user.id, // Assign the creating BCBA
+        parentId: clientData.parentId || null, // Assign parent if provided
         status: 'active',
         admissionDate: DateTime.now(),
         // Required fields with defaults
@@ -1822,6 +1855,114 @@ export default class BCBAController {
         message: 'Failed to create client',
         error: error.message,
         details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      })
+    }
+  }
+
+  /**
+   * Get all parents
+   */
+  async getParents({ response }: HttpContext) {
+    try {
+      const parents = await User.query()
+        .where('role', 'PARENT')
+        .where('is_active', true)
+        .orderBy('name', 'asc')
+
+      return response.json({
+        data: parents.map(parent => ({
+          id: parent.id,
+          name: parent.name,
+          email: parent.email,
+          phone: parent.phone,
+          address: parent.address,
+          isActive: parent.isActive,
+        }))
+      })
+    } catch (error) {
+      console.error('❌ Get parents error:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch parents',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Create a new parent user
+   */
+  async createParent({ request, response }: HttpContext) {
+    try {
+      const { name, email, phone, address, password } = request.only([
+        'name',
+        'email',
+        'phone',
+        'address',
+        'password'
+      ])
+
+      console.log('📝 Creating parent account:', { name, email, hasPassword: !!password })
+
+      // Validate required fields
+      if (!name || !email || !password) {
+        return response.status(400).json({
+          message: 'Name, email, and password are required'
+        })
+      }
+
+      // Validate password length
+      if (password.length < 8) {
+        return response.status(400).json({
+          message: 'Password must be at least 8 characters long'
+        })
+      }
+
+      // Check if email already exists
+      const existingUser = await User.findBy('email', email)
+      if (existingUser) {
+        return response.status(400).json({
+          message: 'A user with this email already exists'
+        })
+      }
+
+      // Create parent user with full access
+      const parent = await User.create({
+        name,
+        email,
+        password, // Password will be hashed automatically by the model
+        role: 'PARENT',
+        phone: phone || null,
+        address: address || null,
+        isActive: true,
+        verified: true, // Set to true so parent can log in immediately
+        permissions: [], // Parents have default permissions
+      })
+
+      console.log('✅ Parent account created:', {
+        id: parent.id,
+        name: parent.name,
+        email: parent.email,
+        role: parent.role,
+        verified: parent.verified
+      })
+
+      return response.status(201).json({
+        success: true,
+        message: 'Parent account created successfully. They can now log in to view their child\'s progress.',
+        data: {
+          id: parent.id,
+          name: parent.name,
+          email: parent.email,
+          phone: parent.phone,
+          address: parent.address,
+          isActive: parent.isActive,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Create parent error:', error)
+      return response.status(400).json({
+        message: 'Failed to create parent account',
+        error: error.message
       })
     }
   }
