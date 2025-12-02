@@ -173,6 +173,9 @@ router.group(() => {
 
     // Common routes for all authenticated users
     router.group(() => {
+      // Sessions health check (for debugging)
+      router.get('/sessions/health', [SessionsController, 'healthCheck'])
+      
       // Sessions (all roles can manage sessions)
       router.get('/sessions/clients-for-group', [SessionsController, 'getClientsForGroupSession'])
       router.get('/sessions/rbt/schedule', [SessionsController, 'getRbtSchedule'])

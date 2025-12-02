@@ -17,6 +17,23 @@ import db from '@adonisjs/lucid/services/db'
  */
 export default class SessionsController {
   /**
+   * Health check endpoint for debugging
+   */
+  async healthCheck({ response }: HttpContext) {
+    return response.ok({
+      message: 'SessionsController is working',
+      endpoints: {
+        clientsForGroup: '/api/common/sessions/clients-for-group',
+        checkOverlap: '/api/common/sessions/check-overlap',
+        create: '/api/common/sessions',
+        rbtSchedule: '/api/common/sessions/rbt/schedule',
+      },
+      timestamp: new Date().toISOString(),
+      controller: 'SessionsController',
+    })
+  }
+
+  /**
    * Get all clients with their parents for group session selection
    * 
    * Returns clients grouped by parent for easy selection in dropdown
