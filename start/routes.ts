@@ -123,6 +123,7 @@ router.group(() => {
       router.get('/clients', [RBTController, 'getAssignedClients'])
       router.get('/schedule', [RBTController, 'getSchedule'])
       router.get('/sessions/history', [RBTController, 'getSessionHistory'])
+      router.get('/sessions/:id', [RBTController, 'getSessionDetail'])
       
       // Session management
       router.post('/sessions/start', [RBTController, 'startSession'])
