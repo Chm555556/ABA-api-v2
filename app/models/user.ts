@@ -32,7 +32,7 @@ export default class User extends AuthFinder(BaseModel) {
   declare password: string
 
   @column()
-  declare role: 'ADMIN' | 'CLINIC' | 'BCBA' | 'RBT' | 'PARENT'
+  declare role: 'ADMIN' | 'CLINIC' | 'BCBA' | 'RBT' | 'PARENT' | 'SCHEDULER'
 
   @column()
   declare clinicId: number | null
@@ -174,5 +174,9 @@ declare permissions: string[]
 
   get isParent() {
     return this.role === 'PARENT'
+  }
+
+  get isScheduler() {
+    return this.role === 'SCHEDULER'
   }
 }

@@ -22,6 +22,7 @@ const SchedulesController = () => import('#controllers/schedules_controller')
 const TreatmentGoalsController = () => import('#controllers/treatment_goals_controller')
 const DocumentsController = () => import('#controllers/documents_controller')
 const SessionsController = () => import('#controllers/sessions_controller')
+const SchedulerController = () => import('#controllers/scheduler_controller')
 
 // Health check route
 router.get('/health', async ({ response }) => {
@@ -131,6 +132,28 @@ router.group(() => {
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
+
+    // Scheduler routes
+    router.group(() => {
+      router.get('/dashboard', [SchedulerController, 'dashboard'])
+      
+      // Calendar and schedules
+      router.get('/calendar', [SchedulerController, 'getCalendar'])
+      router.get('/schedules', [SchedulerController, 'getSchedules'])
+      router.post('/schedules', [SchedulerController, 'createSchedule'])
+      router.put('/schedules/:id', [SchedulerController, 'updateSchedule'])
+      router.delete('/schedules/:id', [SchedulerController, 'deleteSchedule'])
+      
+      // Resource management
+      router.get('/clients', [SchedulerController, 'getClients'])
+      router.get('/rbts', [SchedulerController, 'getRBTs'])
+      router.get('/bcbas', [SchedulerController, 'getBCBAs'])
+      router.get('/clinics', [SchedulerController, 'getClinics'])
+      
+      // Availability and sessions
+      router.post('/check-availability', [SchedulerController, 'checkAvailability'])
+      router.get('/sessions', [SchedulerController, 'getSessions'])
+    }).prefix('/scheduler').use(middleware.role({ roles: ['SCHEDULER', 'ADMIN'] }))
 
     // Clinic routes
     router.group(() => {
