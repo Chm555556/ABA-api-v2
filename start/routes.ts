@@ -145,6 +145,7 @@ router.group(() => {
       router.delete('/schedules/:id', [SchedulerController, 'deleteSchedule'])
       
       // Resource management
+      router.get('/users', [SchedulerController, 'getUsers'])
       router.get('/clients', [SchedulerController, 'getClients'])
       router.get('/rbts', [SchedulerController, 'getRBTs'])
       router.get('/bcbas', [SchedulerController, 'getBCBAs'])
@@ -153,6 +154,8 @@ router.group(() => {
       // Availability and sessions
       router.post('/check-availability', [SchedulerController, 'checkAvailability'])
       router.get('/sessions', [SchedulerController, 'getSessions'])
+      router.post('/sessions', [SchedulerController, 'createSession'])
+      router.get('/sessions/:id', [SchedulerController, 'getSession'])
     }).prefix('/scheduler').use(middleware.role({ roles: ['SCHEDULER', 'ADMIN'] }))
 
     // Clinic routes
