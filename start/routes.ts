@@ -22,6 +22,7 @@ const SchedulesController = () => import('#controllers/schedules_controller')
 const TreatmentGoalsController = () => import('#controllers/treatment_goals_controller')
 const DocumentsController = () => import('#controllers/documents_controller')
 const SessionsController = () => import('#controllers/sessions_controller')
+const SchedulerController = () => import('#controllers/scheduler_controller')
 
 // Health check route
 router.get('/health', async ({ response }) => {
@@ -123,6 +124,7 @@ router.group(() => {
       router.get('/clients', [RBTController, 'getAssignedClients'])
       router.get('/schedule', [RBTController, 'getSchedule'])
       router.get('/sessions/history', [RBTController, 'getSessionHistory'])
+      router.get('/sessions/:id', [RBTController, 'getSessionDetail'])
       
       // Session management
       router.post('/sessions/start', [RBTController, 'startSession'])
@@ -130,6 +132,31 @@ router.group(() => {
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
+
+    // Scheduler routes
+    router.group(() => {
+      router.get('/dashboard', [SchedulerController, 'dashboard'])
+      
+      // Calendar and schedules
+      router.get('/calendar', [SchedulerController, 'getCalendar'])
+      router.get('/schedules', [SchedulerController, 'getSchedules'])
+      router.post('/schedules', [SchedulerController, 'createSchedule'])
+      router.put('/schedules/:id', [SchedulerController, 'updateSchedule'])
+      router.delete('/schedules/:id', [SchedulerController, 'deleteSchedule'])
+      
+      // Resource management
+      router.get('/users', [SchedulerController, 'getUsers'])
+      router.get('/clients', [SchedulerController, 'getClients'])
+      router.get('/rbts', [SchedulerController, 'getRBTs'])
+      router.get('/bcbas', [SchedulerController, 'getBCBAs'])
+      router.get('/clinics', [SchedulerController, 'getClinics'])
+      
+      // Availability and sessions
+      router.post('/check-availability', [SchedulerController, 'checkAvailability'])
+      router.get('/sessions', [SchedulerController, 'getSessions'])
+      router.post('/sessions', [SchedulerController, 'createSession'])
+      router.get('/sessions/:id', [SchedulerController, 'getSession'])
+    }).prefix('/scheduler').use(middleware.role({ roles: ['SCHEDULER', 'ADMIN'] }))
 
     // Clinic routes
     router.group(() => {
@@ -173,6 +200,9 @@ router.group(() => {
 
     // Common routes for all authenticated users
     router.group(() => {
+      // Sessions health check (for debugging)
+      router.get('/sessions/health', [SessionsController, 'healthCheck'])
+      
       // Sessions (all roles can manage sessions)
       router.get('/sessions/clients-for-group', [SessionsController, 'getClientsForGroupSession'])
       router.get('/sessions/rbt/schedule', [SessionsController, 'getRbtSchedule'])

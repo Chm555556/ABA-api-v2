@@ -102,19 +102,74 @@ export default class RBTController {
     try {
       const user = auth.user!
 
-      const clients = await Client.query()
+      console.log(`📋 Fetching all clients for RBT ${user.id}...`)
+
+      // Get clients directly assigned to this RBT
+      const assignedClients = await Client.query()
         .whereHas('assignedRbts', (rbtQuery) => {
           rbtQuery.where('users.id', user.id)
         })
-        .where('status', 'active')
         .preload('bcba')
         .preload('treatmentGoals', (goalsQuery) => {
-          goalsQuery.where('status', 'active')
+          goalsQuery.preload('creator')
         })
-        .orderBy('first_name', 'asc')
+
+      console.log(`✅ Found ${assignedClients.length} directly assigned clients`)
+
+      // Get clients who have sessions/schedules with this RBT
+      const sessionClients = await Client.query()
+        .whereHas('sessionLogs', (sessionQuery) => {
+          sessionQuery.where('rbt_id', user.id)
+        })
+        .preload('bcba')
+        .preload('treatmentGoals', (goalsQuery) => {
+          goalsQuery.preload('creator')
+        })
+
+      console.log(`✅ Found ${sessionClients.length} clients with sessions`)
+
+      // Get clients who have schedules with this RBT
+      const scheduleClients = await Client.query()
+        .whereHas('schedules', (scheduleQuery) => {
+          scheduleQuery.where('rbt_id', user.id)
+        })
+        .preload('bcba')
+        .preload('treatmentGoals', (goalsQuery) => {
+          goalsQuery.preload('creator')
+        })
+
+      console.log(`✅ Found ${scheduleClients.length} clients with schedules`)
+
+      // Combine all clients and remove duplicates
+      const allClientsMap = new Map()
+      
+      // Add assigned clients
+      assignedClients.forEach(client => {
+        allClientsMap.set(client.id, client)
+      })
+      
+      // Add session clients
+      sessionClients.forEach(client => {
+        if (!allClientsMap.has(client.id)) {
+          allClientsMap.set(client.id, client)
+        }
+      })
+      
+      // Add schedule clients
+      scheduleClients.forEach(client => {
+        if (!allClientsMap.has(client.id)) {
+          allClientsMap.set(client.id, client)
+        }
+      })
+
+      const allClients = Array.from(allClientsMap.values())
+      console.log(`✅ Total unique clients: ${allClients.length}`)
+
+      // Sort by first name
+      allClients.sort((a, b) => a.firstName.localeCompare(b.firstName))
 
       return response.json({
-        data: clients.map(client => ({
+        data: allClients.map(client => ({
           id: client.id,
           fullName: `${client.firstName} ${client.lastName}`,
           firstName: client.firstName,
@@ -122,19 +177,27 @@ export default class RBTController {
           age: client.age,
           dateOfBirth: client.dateOfBirth.toISODate(),
           status: client.status,
+          insuranceType: client.insuranceType || 'Not specified',
+          bcbaId: client.assignedBcba,
           bcbaName: client.bcba?.name || 'Not assigned',
-          treatmentGoals: client.treatmentGoals.map(goal => ({
+          treatmentGoals: client.treatmentGoals.map((goal: any) => ({
             id: goal.id,
             title: goal.title,
             description: goal.description,
+            targetBehavior: goal.targetBehavior,
             measurementType: goal.measurementType,
             masteryCriteria: goal.masteryCriteria,
             status: goal.status,
+            createdBy: goal.createdBy,
+            createdByName: goal.creator?.name || 'Unknown',
+            createdAt: goal.createdAt.toISO(),
+            updatedAt: goal.updatedAt?.toISO() || null,
           })),
           admissionDate: client.admissionDate.toISODate(),
         })),
       })
     } catch (error) {
+      console.error('❌ Error fetching assigned clients:', error)
       return response.status(500).json({
         message: 'Failed to fetch assigned clients',
         error: error.message,
@@ -427,6 +490,406 @@ export default class RBTController {
       return response.status(500).json({
         message: 'Failed to fetch session history',
         error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get detailed session information
+   */
+  async getSessionDetail({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`🔍 Fetching session details for session ${sessionId}, RBT ${user.id}`)
+
+      // Try Schedule first (since RBTSessions uses Schedule data)
+      let schedule = await Schedule.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('bcba')
+            .preload('parent')
+            .preload('treatmentGoals', (goalsQuery) => {
+              goalsQuery.preload('creator')
+            })
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .first()
+
+      if (schedule) {
+        console.log(`✅ Found schedule ${sessionId}`)
+        
+        // Check if client exists - if not, return a special response indicating no client
+        if (!schedule.client || !schedule.clientId) {
+          console.log(`⚠️ Schedule ${sessionId} has no client assigned`)
+          return response.json({
+            data: {
+              id: schedule.id,
+              type: 'schedule',
+              sessionType: 'one_to_one',
+              noClient: true,
+              
+              // Basic session info without client
+              date: schedule.date.toISODate(),
+              startTime: schedule.startTime,
+              endTime: schedule.endTime,
+              location: schedule.location,
+              status: schedule.status,
+              sessionNotes: schedule.notes || null,
+              
+              // RBT Information
+              rbt: schedule.rbt ? {
+                id: schedule.rbt.id,
+                name: schedule.rbt.name,
+                email: schedule.rbt.email,
+              } : null,
+
+              // BCBA Information
+              bcba: schedule.bcba ? {
+                id: schedule.bcba.id,
+                name: schedule.bcba.name,
+                email: schedule.bcba.email,
+                phone: schedule.bcba.phone || '',
+              } : null,
+              
+              createdAt: schedule.createdAt.toISO(),
+              updatedAt: schedule.updatedAt?.toISO() || null,
+            }
+          })
+        }
+
+        // Return schedule data (Schedule doesn't support group sessions, so always one-to-one)
+        return response.json({
+          data: {
+            id: schedule.id,
+            type: 'schedule',
+            sessionType: 'one_to_one',
+            
+            // Client Information
+            client: schedule.client ? {
+              id: schedule.client.id,
+              fullName: `${schedule.client.firstName} ${schedule.client.lastName}`,
+              firstName: schedule.client.firstName,
+              lastName: schedule.client.lastName,
+              age: schedule.client.age,
+              dateOfBirth: schedule.client.dateOfBirth.toISODate(),
+              status: schedule.client.status,
+              insuranceType: schedule.client.insuranceType || 'Not specified',
+              diagnosis: schedule.client.diagnosis || [],
+              admissionDate: schedule.client.admissionDate.toISODate(),
+              address: {
+                street: schedule.client.street || '',
+                city: schedule.client.city || '',
+                state: schedule.client.state || '',
+                zipCode: schedule.client.zipCode || '',
+              },
+              phone: schedule.client.phone || '',
+              email: schedule.client.email || '',
+            } : null,
+
+            // No participants for Schedule (only SessionLog supports group sessions)
+            participants: [],
+
+            // Parent Information
+            parent: schedule.client.parent ? {
+              id: schedule.client.parent.id,
+              name: schedule.client.parent.name,
+              email: schedule.client.parent.email,
+              phone: schedule.client.parent.phone || '',
+            } : null,
+
+            // BCBA Information
+            bcba: schedule.bcba ? {
+              id: schedule.bcba.id,
+              name: schedule.bcba.name,
+              email: schedule.bcba.email,
+              phone: schedule.bcba.phone || '',
+            } : schedule.client.bcba ? {
+              id: schedule.client.bcba.id,
+              name: schedule.client.bcba.name,
+              email: schedule.client.bcba.email,
+              phone: schedule.client.bcba.phone || '',
+            } : null,
+
+            // RBT Information
+            rbt: schedule.rbt ? {
+              id: schedule.rbt.id,
+              name: schedule.rbt.name,
+              email: schedule.rbt.email,
+            } : null,
+
+            // Treatment Goals
+            treatmentGoals: schedule.client.treatmentGoals ? schedule.client.treatmentGoals.map((goal: any) => ({
+              id: goal.id,
+              title: goal.title,
+              description: goal.description || '',
+              targetBehavior: goal.targetBehavior || '',
+              measurementType: goal.measurementType,
+              masteryCriteria: goal.masteryCriteria || '',
+              status: goal.status,
+              createdBy: goal.createdBy,
+              createdByName: goal.creator?.name || 'Unknown',
+              createdAt: goal.createdAt.toISO(),
+              updatedAt: goal.updatedAt?.toISO() || null,
+            })) : [],
+
+            // Session Details
+            date: schedule.date.toISODate(),
+            startTime: schedule.startTime,
+            endTime: schedule.endTime,
+            duration: null,
+            location: schedule.location,
+            locationAddress: null,
+            status: schedule.status,
+            sessionNotes: schedule.notes || null,
+            bcbaApproved: null,
+            bcbaNotes: null,
+            cptCode: null,
+            serviceType: null,
+            createdAt: schedule.createdAt.toISO(),
+            updatedAt: schedule.updatedAt?.toISO() || null,
+          }
+        })
+      }
+
+      // If not in Schedule, try SessionLog
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('bcba')
+            .preload('parent')
+            .preload('treatmentGoals', (goalsQuery) => {
+              goalsQuery.preload('creator')
+            })
+        })
+        .preload('participants', (participantsQuery) => {
+          participantsQuery.preload('client', (clientQuery) => {
+            clientQuery
+              .preload('bcba')
+              .preload('parent')
+              .preload('treatmentGoals', (goalsQuery) => {
+                goalsQuery.preload('creator')
+              })
+          })
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .first()
+
+      if (!session) {
+        console.error(`❌ Session ${sessionId} not found for RBT ${user.id}`)
+        return response.status(404).json({
+          message: 'Session not found or you do not have access to it'
+        })
+      }
+
+      // Return SessionLog data
+      console.log(`✅ Found session ${sessionId}`)
+
+      // Check if this is a group/community session with no participants OR a one-to-one with no client
+      const isGroupOrCommunity = session.sessionType === 'group' || session.sessionType === 'community'
+      const hasNoData = isGroupOrCommunity 
+        ? (!session.participants || session.participants.length === 0)
+        : (!session.client || !session.clientId)
+
+      if (hasNoData) {
+        console.log(`⚠️ Session ${sessionId} has no ${isGroupOrCommunity ? 'participants' : 'client'} assigned`)
+        return response.json({
+          data: {
+            id: session.id,
+            type: 'session_log',
+            sessionType: session.sessionType || 'one_to_one',
+            noClient: true,
+            
+            // Basic session info without client
+            date: session.date.toISODate(),
+            startTime: session.startTime,
+            endTime: session.endTime,
+            duration: session.duration,
+            totalHours: session.totalHours,
+            location: session.location,
+            locationAddress: session.locationAddress || null,
+            status: session.status,
+            sessionNotes: session.sessionNotes || null,
+            bcbaApproved: session.bcbaApproved,
+            bcbaNotes: session.bcbaNotes || null,
+            cptCode: session.cptCode || null,
+            serviceType: session.serviceType || null,
+            
+            // RBT Information
+            rbt: session.rbt ? {
+              id: session.rbt.id,
+              name: session.rbt.name,
+              email: session.rbt.email,
+            } : null,
+
+            // BCBA Information
+            bcba: session.bcba ? {
+              id: session.bcba.id,
+              name: session.bcba.name,
+              email: session.bcba.email,
+              phone: session.bcba.phone || '',
+            } : null,
+            
+            createdAt: session.createdAt.toISO(),
+            updatedAt: session.updatedAt?.toISO() || null,
+          }
+        })
+      }
+
+      return response.json({
+        data: {
+          id: session.id,
+          type: 'session_log',
+          sessionType: session.sessionType || 'one_to_one',
+          
+          // Client Information (for one-to-one sessions)
+          client: session.client ? {
+            id: session.client.id,
+            fullName: `${session.client.firstName} ${session.client.lastName}`,
+            firstName: session.client.firstName,
+            lastName: session.client.lastName,
+            age: session.client.age,
+            dateOfBirth: session.client.dateOfBirth.toISODate(),
+            status: session.client.status,
+            insuranceType: session.client.insuranceType || 'Not specified',
+            diagnosis: session.client.diagnosis || [],
+            admissionDate: session.client.admissionDate.toISODate(),
+            address: {
+              street: session.client.street || '',
+              city: session.client.city || '',
+              state: session.client.state || '',
+              zipCode: session.client.zipCode || '',
+            },
+            phone: session.client.phone || '',
+            email: session.client.email || '',
+          } : null,
+
+          // Participants (for group/community sessions)
+          participants: session.participants ? session.participants.map((participant: any) => ({
+            id: participant.id,
+            clientId: participant.clientId,
+            client: participant.client ? {
+              id: participant.client.id,
+              fullName: `${participant.client.firstName} ${participant.client.lastName}`,
+              firstName: participant.client.firstName,
+              lastName: participant.client.lastName,
+              age: participant.client.age,
+              dateOfBirth: participant.client.dateOfBirth.toISODate(),
+              status: participant.client.status,
+              insuranceType: participant.client.insuranceType || 'Not specified',
+              diagnosis: participant.client.diagnosis || [],
+              admissionDate: participant.client.admissionDate.toISODate(),
+              address: {
+                street: participant.client.street || '',
+                city: participant.client.city || '',
+                state: participant.client.state || '',
+                zipCode: participant.client.zipCode || '',
+              },
+              phone: participant.client.phone || '',
+              email: participant.client.email || '',
+            } : null,
+            parent: participant.client?.parent ? {
+              id: participant.client.parent.id,
+              name: participant.client.parent.name,
+              email: participant.client.parent.email,
+              phone: participant.client.parent.phone || '',
+            } : null,
+            bcba: participant.client?.bcba ? {
+              id: participant.client.bcba.id,
+              name: participant.client.bcba.name,
+              email: participant.client.bcba.email,
+              phone: participant.client.bcba.phone || '',
+            } : null,
+            treatmentGoals: participant.client?.treatmentGoals ? participant.client.treatmentGoals.map((goal: any) => ({
+              id: goal.id,
+              title: goal.title,
+              description: goal.description || '',
+              targetBehavior: goal.targetBehavior || '',
+              measurementType: goal.measurementType,
+              masteryCriteria: goal.masteryCriteria || '',
+              status: goal.status,
+              createdBy: goal.createdBy,
+              createdByName: goal.creator?.name || 'Unknown',
+              createdAt: goal.createdAt.toISO(),
+              updatedAt: goal.updatedAt?.toISO() || null,
+            })) : [],
+          })) : [],
+
+          // Parent Information
+          parent: session.client?.parent ? {
+            id: session.client.parent.id,
+            name: session.client.parent.name,
+            email: session.client.parent.email,
+            phone: session.client.parent.phone || '',
+          } : null,
+
+          // BCBA Information
+          bcba: session.bcba ? {
+            id: session.bcba.id,
+            name: session.bcba.name,
+            email: session.bcba.email,
+            phone: session.bcba.phone || '',
+          } : session.client?.bcba ? {
+            id: session.client.bcba.id,
+            name: session.client.bcba.name,
+            email: session.client.bcba.email,
+            phone: session.client.bcba.phone || '',
+          } : null,
+
+          // RBT Information
+          rbt: session.rbt ? {
+            id: session.rbt.id,
+            name: session.rbt.name,
+            email: session.rbt.email,
+          } : null,
+
+          // Treatment Goals
+          treatmentGoals: session.client?.treatmentGoals ? session.client.treatmentGoals.map((goal: any) => ({
+            id: goal.id,
+            title: goal.title,
+            description: goal.description || '',
+            targetBehavior: goal.targetBehavior || '',
+            measurementType: goal.measurementType,
+            masteryCriteria: goal.masteryCriteria || '',
+            status: goal.status,
+            createdBy: goal.createdBy,
+            createdByName: goal.creator?.name || 'Unknown',
+            createdAt: goal.createdAt.toISO(),
+            updatedAt: goal.updatedAt?.toISO() || null,
+          })) : [],
+
+          // Session Details
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          location: session.location,
+          locationAddress: session.locationAddress || null,
+          status: session.status,
+          sessionNotes: session.sessionNotes || null,
+          bcbaApproved: session.bcbaApproved,
+          bcbaNotes: session.bcbaNotes || null,
+          cptCode: session.cptCode || null,
+          serviceType: session.serviceType || null,
+          createdAt: session.createdAt.toISO(),
+          updatedAt: session.updatedAt?.toISO() || null,
+        }
+      })
+    } catch (error: any) {
+      console.error('❌ Error fetching session details:', error)
+      console.error('Error stack:', error.stack)
+      return response.status(500).json({
+        message: 'Failed to fetch session details',
+        error: error.message,
+        details: error.stack?.split('\n').slice(0, 5).join('\n')
       })
     }
   }
