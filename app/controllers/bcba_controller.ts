@@ -1025,6 +1025,7 @@ export default class BCBAController {
   async getSchedule({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
+      const clientId = request.input('clientId')
       const startDate = request.input('startDate')
       const endDate = request.input('endDate')
       const limit = request.input('limit', 1000)
@@ -1032,6 +1033,7 @@ export default class BCBAController {
       console.log(`🔍 BCBA Schedule Request:`)
       console.log(`   User ID: ${user.id}`)
       console.log(`   User Role: ${user.role}`)
+      console.log(`   Client ID: ${clientId}`)
       console.log(`   Date Range: ${startDate} to ${endDate}`)
 
       // Build query for sessions where BCBA is assigned
@@ -1042,6 +1044,17 @@ export default class BCBAController {
         .preload('participants', (participantsQuery) => {
           participantsQuery.preload('client')
         })
+
+      // Filter by specific client if provided
+      if (clientId) {
+        query = query.where((builder) => {
+          builder
+            .where('client_id', clientId) // For one-to-one sessions
+            .orWhereHas('participants', (participantQuery) => {
+              participantQuery.where('client_id', clientId) // For group sessions
+            })
+        })
+      }
 
       if (startDate) {
         query = query.where('date', '>=', startDate)
@@ -1056,7 +1069,7 @@ export default class BCBAController {
         .orderBy('start_time', 'asc')
         .limit(limit)
 
-      console.log(`✅ Found ${sessions.length} sessions for BCBA ${user.id}`)
+      console.log(`✅ Found ${sessions.length} sessions for BCBA ${user.id}${clientId ? ` (filtered by client ${clientId})` : ''}`)
 
       return response.json({
         data: sessions.map(session => ({
