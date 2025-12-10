@@ -35,8 +35,22 @@ export default class TreatmentGoal extends BaseModel {
   declare domain: string | null
 
   @column({
-    prepare: (value: string[]) => JSON.stringify(value),
-    consume: (value: string) => JSON.parse(value),
+    prepare: (value: string[] | null) => value ? JSON.stringify(value) : null,
+    consume: (value: string | null) => {
+      if (!value) return null
+      try {
+        return JSON.parse(value)
+      } catch (error) {
+        // If it's not valid JSON, treat it as comma-separated string
+        if (typeof value === 'string' && value.includes(',')) {
+          return value.split(',').map((item: string) => item.trim())
+        } else if (typeof value === 'string') {
+          // Single item, wrap in array
+          return [value.trim()]
+        }
+        return null
+      }
+    },
   })
   declare promptHierarchy: string[] | null
 

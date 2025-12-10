@@ -183,12 +183,46 @@ export default class BCBAController {
             city: client.clinic.city,
             state: client.clinic.state,
           } : null,
-          treatmentGoals: client.treatmentGoals.map(goal => ({
-            id: goal.id,
-            title: goal.title,
-            status: goal.status,
-            measurementType: goal.measurementType,
-          })),
+          treatmentGoals: client.treatmentGoals.map(goal => {
+            // Safely parse JSON fields with fallback for comma-separated strings
+            let promptHierarchy = null
+            if (goal.promptHierarchy) {
+              try {
+                // Try to parse as JSON first
+                promptHierarchy = JSON.parse(goal.promptHierarchy)
+              } catch (e) {
+                // If JSON parsing fails, try to split comma-separated string
+                if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
+                  promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
+                } else if (typeof goal.promptHierarchy === 'string') {
+                  // Single item, wrap in array
+                  promptHierarchy = [goal.promptHierarchy.trim()]
+                } else {
+                  promptHierarchy = null
+                }
+              }
+            }
+
+            return {
+              id: goal.id,
+              title: goal.title,
+              description: goal.description,
+              targetBehavior: goal.targetBehavior,
+              measurementType: goal.measurementType,
+              masteryCriteria: goal.masteryCriteria,
+              status: goal.status,
+              domain: goal.domain,
+              promptHierarchy: promptHierarchy,
+              baselineScore: goal.baselineScore,
+              baselineTrials: goal.baselineTrials,
+              targetPercentage: goal.targetPercentage,
+              consecutiveSessions: goal.consecutiveSessions,
+              goalPhase: goal.goalPhase,
+              createdBy: goal.createdBy,
+              createdAt: goal.createdAt.toISO(),
+              updatedAt: goal.updatedAt?.toISO(),
+            }
+          }),
           admissionDate: client.admissionDate.toISODate(),
           createdAt: client.createdAt.toISO(),
         },
