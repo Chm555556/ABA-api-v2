@@ -32,6 +32,30 @@ export default class TreatmentGoal extends BaseModel {
   declare status: 'active' | 'mastered' | 'discontinued'
 
   @column()
+  declare domain: string | null
+
+  @column({
+    prepare: (value: string[]) => JSON.stringify(value),
+    consume: (value: string) => JSON.parse(value),
+  })
+  declare promptHierarchy: string[] | null
+
+  @column()
+  declare baselineScore: number | null
+
+  @column()
+  declare baselineTrials: number | null
+
+  @column()
+  declare targetPercentage: number | null
+
+  @column()
+  declare consecutiveSessions: number | null
+
+  @column()
+  declare goalPhase: 'acquisition' | 'maintenance' | 'mastered' | 'discontinued'
+
+  @column()
   declare createdBy: number
 
   @column.dateTime({ autoCreate: true })

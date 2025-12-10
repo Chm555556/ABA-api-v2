@@ -214,9 +214,10 @@ export default class BCBAController {
         .preload('clinic')
         .preload('assignedRbts')
         .preload('parent')
-        .preload('treatmentGoals', (goalsQuery) => {
-          goalsQuery.where('status', 'active')
-        })
+        // Temporarily disabled to debug
+        // .preload('treatmentGoals', (goalsQuery) => {
+        //   goalsQuery.where('status', 'active')
+        // })
         .orderBy('first_name', 'asc')
 
       console.log('🔍 getClients - Total clients:', clients.length)
@@ -266,10 +267,7 @@ export default class BCBAController {
             name: rbt.name,
             email: rbt.email,
           })),
-          treatmentGoals: client.treatmentGoals.map(goal => ({
-            id: goal.id,
-            title: goal.title,
-          })),
+          treatmentGoals: [], // Temporarily disabled to debug
         })),
       })
     } catch (error) {
@@ -733,26 +731,91 @@ export default class BCBAController {
       const user = auth.user!
       const clientId = request.input('clientId')
 
-      let query = TreatmentGoal.query()
-        .where('created_by', user.id)
-        .preload('client')
-
+      // Use raw SQL to avoid model serialization issues with new fields
+      let sqlQuery = `
+        SELECT 
+          tg.id,
+          tg.client_id as clientId,
+          tg.title,
+          tg.description,
+          tg.target_behavior as targetBehavior,
+          tg.measurement_type as measurementType,
+          tg.mastery_criteria as masteryCriteria,
+          tg.status,
+          tg.domain,
+          tg.prompt_hierarchy as promptHierarchy,
+          tg.baseline_score as baselineScore,
+          tg.baseline_trials as baselineTrials,
+          tg.target_percentage as targetPercentage,
+          tg.consecutive_sessions as consecutiveSessions,
+          tg.goal_phase as goalPhase,
+          tg.created_by as createdBy,
+          tg.created_at,
+          tg.updated_at,
+          CONCAT(c.first_name, ' ', c.last_name) as clientName
+        FROM treatment_goals tg
+        LEFT JOIN clients c ON tg.client_id = c.id
+        WHERE tg.created_by = ?
+      `
+      
+      const params = [user.id]
+      
       if (clientId) {
-        query = query.where('client_id', clientId)
+        sqlQuery += ' AND tg.client_id = ?'
+        params.push(clientId)
       }
+      
+      sqlQuery += ' ORDER BY tg.created_at DESC'
+      
+      const rawResult = await db.rawQuery(sqlQuery, params)
+      const goals = rawResult[0] // Get the actual results from the first element
 
-      const goals = await query.orderBy('created_at', 'desc')
+
 
       return response.json({
-        data: goals.map(goal => ({
-          id: goal.id,
-          clientId: goal.clientId,
-          clientName: goal.client?.fullName || 'Unknown Client',
-          title: goal.title,
-          description: goal.description,
-          status: goal.status,
-          createdAt: goal.createdAt.toISO()
-        }))
+        data: goals.map((goal: any) => {
+          // Safely parse JSON fields with fallback for comma-separated strings
+          let promptHierarchy = null
+          if (goal.promptHierarchy) {
+            try {
+              // Try to parse as JSON first
+              promptHierarchy = JSON.parse(goal.promptHierarchy)
+            } catch (e) {
+              // If JSON parsing fails, try to split comma-separated string
+              if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
+                promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
+              } else if (typeof goal.promptHierarchy === 'string') {
+                // Single item, wrap in array
+                promptHierarchy = [goal.promptHierarchy.trim()]
+              } else {
+                console.warn('Failed to parse promptHierarchy:', goal.promptHierarchy)
+                promptHierarchy = null
+              }
+            }
+          }
+
+          return {
+            id: goal.id,
+            clientId: goal.clientId,
+            clientName: goal.clientName || 'Unknown Client',
+            title: goal.title || '',
+            description: goal.description || '',
+            targetBehavior: goal.targetBehavior || '',
+            measurementType: goal.measurementType || '',
+            masteryCriteria: goal.masteryCriteria || '',
+            status: goal.status || 'active',
+            domain: goal.domain || '',
+            promptHierarchy: promptHierarchy,
+            baselineScore: goal.baselineScore,
+            baselineTrials: goal.baselineTrials,
+            targetPercentage: goal.targetPercentage,
+            consecutiveSessions: goal.consecutiveSessions,
+            goalPhase: goal.goalPhase || 'acquisition',
+            createdBy: goal.createdBy,
+            createdAt: goal.created_at ? new Date(goal.created_at).toISOString() : new Date().toISOString(),
+            updatedAt: goal.updated_at ? new Date(goal.updated_at).toISOString() : null,
+          }
+        })
       })
     } catch (error) {
       console.error('Get treatment goals error:', error)

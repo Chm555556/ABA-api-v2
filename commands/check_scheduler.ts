@@ -1,7 +1,6 @@
 import { BaseCommand } from '@adonisjs/core/ace'
 import type { CommandOptions } from '@adonisjs/core/types/ace'
 import User from '#models/user'
-import hash from '@adonisjs/core/services/hash'
 
 export default class CheckScheduler extends BaseCommand {
   static commandName = 'check:scheduler'
