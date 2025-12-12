@@ -1606,118 +1606,130 @@ export default class RBTController {
   }
 
   /**
-   * Get session analytics
+   * Get session analytics with treatment goal focus
    */
   async getSessionAnalytics({ auth, params, response }: HttpContext) {
     try {
       const user = auth.user!
       const sessionId = params.id
 
-      console.log(`📊 Getting analytics for session ${sessionId}`)
+      console.log(`📊 Getting treatment goal analytics for session ${sessionId}`)
+
+      // Import analytics services
+      const TrialAnalyticsService = (await import('#services/trial_analytics_service')).default
 
       // Verify session belongs to RBT
       const session = await SessionLog.query()
         .where('id', sessionId)
         .where('rbt_id', user.id)
-        .preload('client', (clientQuery) => {
-          clientQuery.preload('treatmentGoals')
-        })
+        .preload('client')
         .firstOrFail()
 
-      // Get all trials for this session (using direct session relationship)
+      // Get all trials for this session
       const trials = await Trial.query()
         .where('session_id', sessionId)
+        .preload('goal')
         .orderBy('timestamp', 'asc')
-
-      // Get behavior data summaries
-      const behaviorData = await BehaviorData.query()
-        .where('session_id', sessionId)
 
       // Get treatment goals for this session's client
       const treatmentGoals = session.clientId ? await TreatmentGoal.query()
         .where('client_id', session.clientId)
         .where('status', 'active') : []
 
-      // Create goals map for lookup
-      const goalsMap = new Map(treatmentGoals.map(goal => [goal.id, goal]))
-
-      // Calculate analytics
-      const goalProgress: { [key: string]: any } = {}
-      const trialsByGoal: { [key: string]: any[] } = {}
-
       // Group trials by goal
+      const trialsByGoal = new Map<number, any[]>()
       trials.forEach(trial => {
-        const goalId = trial.goalId?.toString()
-        if (goalId && !trialsByGoal[goalId]) {
-          trialsByGoal[goalId] = []
-        }
-        if (goalId) {
-          trialsByGoal[goalId].push(trial)
-        }
-      })
-
-      // Calculate progress for each goal
-      Object.keys(trialsByGoal).forEach(goalId => {
-        const goalTrials = trialsByGoal[goalId]
-        const goal = goalsMap.get(parseInt(goalId))
-        const correct = goalTrials.filter((t: any) => t.response === 'correct').length
-        const incorrect = goalTrials.filter((t: any) => t.response === 'incorrect').length
-        const prompted = goalTrials.filter((t: any) => t.response === 'prompted').length
-        const total = goalTrials.length
-
-        goalProgress[goalId] = {
-          goalId: parseInt(goalId),
-          goalTitle: goal?.title || 'Unknown Goal',
-          totalTrials: total,
-          correct,
-          incorrect,
-          prompted,
-          percentage: total > 0 ? Math.round((correct / total) * 100) : 0,
-          averageDuration: goalTrials
-            .filter((t: any) => t.durationSeconds)
-            .reduce((sum: number, t: any) => sum + (t.durationSeconds || 0), 0) / 
-            goalTrials.filter((t: any) => t.durationSeconds).length || 0
+        if (trial.goalId) {
+          if (!trialsByGoal.has(trial.goalId)) {
+            trialsByGoal.set(trial.goalId, [])
+          }
+          trialsByGoal.get(trial.goalId)!.push(trial)
         }
       })
 
-      // Calculate session summary
+      // Calculate analytics for each goal
+      const goalAnalytics = []
+      for (const [goalId, goalTrials] of trialsByGoal) {
+        const goal = treatmentGoals.find(g => g.id === goalId)
+        if (!goal) continue
+
+        const totalTrials = goalTrials.length
+        const correctTrials = goalTrials.filter(t => t.response === 'correct').length
+        const incorrectTrials = goalTrials.filter(t => t.response === 'incorrect').length
+        const promptedTrials = goalTrials.filter(t => t.response === 'prompted').length
+        const independentTrials = goalTrials.filter(t => t.independent).length
+
+        const percentageCorrect = totalTrials > 0 ? Math.round((correctTrials / totalTrials) * 100) : 0
+        const percentageIndependent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 100) : 0
+
+        // Calculate trend (simplified)
+        let trend: 'ascending' | 'stable' | 'descending' = 'stable'
+        if (goalTrials.length >= 3) {
+          const firstHalf = goalTrials.slice(0, Math.floor(goalTrials.length / 2))
+          const secondHalf = goalTrials.slice(Math.floor(goalTrials.length / 2))
+          
+          const firstHalfCorrect = firstHalf.filter(t => t.response === 'correct').length / firstHalf.length
+          const secondHalfCorrect = secondHalf.filter(t => t.response === 'correct').length / secondHalf.length
+          
+          const improvement = secondHalfCorrect - firstHalfCorrect
+          if (improvement > 0.1) trend = 'ascending'
+          else if (improvement < -0.1) trend = 'descending'
+        }
+
+        // Check mastery criteria
+        const masteryCriteria = goal.masteryCriteria || ''
+        const targetPercentage = masteryCriteria.match(/(\d+)%/) ? parseInt(masteryCriteria.match(/(\d+)%/)![1]) : 80
+        const masteryMet = percentageCorrect >= targetPercentage && totalTrials >= 3
+
+        // Generate recommendations
+        const recommendations = []
+        if (percentageCorrect < 50) {
+          recommendations.push('Consider breaking down the skill into smaller steps')
+          recommendations.push('Increase reinforcement frequency')
+        } else if (percentageCorrect < 80) {
+          recommendations.push('Continue current teaching strategy with minor adjustments')
+        } else if (masteryMet) {
+          recommendations.push('Consider moving to maintenance phase')
+          recommendations.push('Introduce generalization opportunities')
+        }
+
+        if (percentageIndependent < 30) {
+          recommendations.push('Focus on fading prompts systematically')
+        }
+
+        if (trend === 'descending') {
+          recommendations.push('Review teaching procedures for effectiveness')
+        }
+
+        goalAnalytics.push({
+          goalId,
+          goalTitle: goal.title,
+          totalTrials,
+          correctTrials,
+          incorrectTrials,
+          promptedTrials,
+          independentTrials,
+          percentageCorrect,
+          percentageIndependent,
+          trend,
+          masteryMet,
+          recommendations: recommendations.slice(0, 3) // Limit to 3 recommendations
+        })
+      }
+
+      // Calculate overall session metrics
       const totalTrials = trials.length
       const totalCorrect = trials.filter(t => t.response === 'correct').length
-      const sessionDuration = session.duration || 0
-      const trialsPerMinute = sessionDuration > 0 ? totalTrials / sessionDuration : 0
+      const overallPercentage = totalTrials > 0 ? Math.round((totalCorrect / totalTrials) * 100) : 0
 
-      console.log(`✅ Analytics calculated for session ${sessionId}`)
+      console.log(`✅ Treatment goal analytics calculated for session ${sessionId}`)
 
       return response.json({
-        data: {
-          sessionId: session.id,
-          sessionSummary: {
-            totalTrials,
-            totalCorrect,
-            overallPercentage: totalTrials > 0 ? Math.round((totalCorrect / totalTrials) * 100) : 0,
-            sessionDuration,
-            trialsPerMinute: Math.round(trialsPerMinute * 100) / 100,
-            engagementScore: session.engagementScore,
-          },
-          goalProgress: Object.values(goalProgress),
-          trialTimeline: trials.map(trial => ({
-            id: trial.id,
-            goalId: trial.goalId,
-            goalTitle: trial.goal?.title || 'Unknown Goal',
-            timestamp: trial.timestamp.toISO(),
-            response: trial.response,
-            durationSeconds: trial.durationSeconds,
-          })),
-          behaviorDataSummary: behaviorData.map(bd => ({
-            id: bd.id,
-            goalId: bd.goalId,
-            goalTitle: bd.goal?.title || 'Unknown Goal',
-            correct: bd.correct,
-            incorrect: bd.incorrect,
-            prompted: bd.prompted,
-            percentage: bd.percentage,
-          })),
-        }
+        sessionId: session.id,
+        totalTrials,
+        overallPercentage,
+        goalAnalytics,
+        behaviorReduction: null // Could be calculated from behavior data if needed
       })
     } catch (error) {
       console.error('❌ Error getting session analytics:', error)
