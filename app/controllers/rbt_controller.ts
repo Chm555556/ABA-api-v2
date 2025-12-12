@@ -218,21 +218,83 @@ export default class RBTController {
         'serviceType',
       ])
 
-      // Verify RBT has access to this client
-      const client = await Client.query()
+      console.log('🚀 RBT Start Session Request:', {
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        clientId,
+        location,
+        cptCode,
+        serviceType
+      })
+
+      // First check if client exists
+      const clientExists = await Client.find(clientId)
+      if (!clientExists) {
+        console.log(`❌ Client ${clientId} not found`)
+        return response.status(404).json({
+          message: `Client with ID ${clientId} not found`,
+          error: 'CLIENT_NOT_FOUND'
+        })
+      }
+
+      console.log('✅ Client exists:', {
+        id: clientExists.id,
+        name: clientExists.fullName,
+        assignedBcba: clientExists.assignedBcba
+      })
+
+      // Check if RBT has access to this client through direct assignment
+      console.log('🔍 Checking direct RBT assignment...')
+      const directAssignment = await Client.query()
         .where('id', clientId)
         .whereHas('assignedRbts', (rbtQuery) => {
           rbtQuery.where('users.id', user.id)
         })
-        .firstOrFail()
+        .first()
+
+      if (directAssignment) {
+        console.log('✅ RBT has direct assignment to client')
+      } else {
+        console.log('⚠️ No direct assignment found, checking sessions/schedules...')
+        
+        // Check if RBT has sessions with this client
+        const hasSession = await SessionLog.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        // Check if RBT has schedules with this client
+        const hasSchedule = await Schedule.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        if (!hasSession && !hasSchedule) {
+          console.log(`❌ RBT ${user.id} has no access to client ${clientId}`)
+          return response.status(403).json({
+            message: `You do not have access to client ${clientExists.fullName}. Please contact your supervisor.`,
+            error: 'ACCESS_DENIED',
+            details: {
+              clientId,
+              clientName: clientExists.fullName,
+              rbtId: user.id,
+              rbtName: user.name
+            }
+          })
+        }
+
+        console.log('✅ RBT has session/schedule access to client')
+      }
 
       const now = DateTime.now()
       const startTime = now.toFormat('HH:mm')
 
+      console.log('📝 Creating session log...')
       const session = await SessionLog.create({
-        clientId: client.id,
+        clientId: clientExists.id,
         rbtId: user.id,
-        bcbaId: client.assignedBcba || null,
+        bcbaId: clientExists.assignedBcba || null,
         date: now,
         startTime,
         endTime: startTime, // Will be updated when session ends
@@ -246,12 +308,14 @@ export default class RBTController {
         status: 'draft',
       })
 
+      console.log('✅ Session created successfully:', session.id)
+
       return response.status(201).json({
         message: 'Session started successfully',
         data: {
           id: session.id,
           clientId: session.clientId,
-          clientName: client.fullName,
+          clientName: clientExists.fullName,
           startTime: session.startTime,
           location: session.location,
           status: session.status,
@@ -259,9 +323,21 @@ export default class RBTController {
         },
       })
     } catch (error) {
+      console.error('❌ RBT Start Session Error:', error)
+      console.error('Stack trace:', error.stack)
+      
+      // Provide more specific error messages
+      if (error.code === 'E_ROW_NOT_FOUND') {
+        return response.status(404).json({
+          message: 'Client not found or you do not have access to this client',
+          error: 'CLIENT_ACCESS_DENIED'
+        })
+      }
+
       return response.status(400).json({
         message: 'Failed to start session',
         error: error.message,
+        details: error.stack?.split('\n').slice(0, 3).join('\n')
       })
     }
   }

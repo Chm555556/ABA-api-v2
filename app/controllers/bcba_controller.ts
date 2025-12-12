@@ -16,26 +16,34 @@ export default class BCBAController {
   async dashboard({ auth, response }: HttpContext) {
     try {
       const user = auth.user!
+      console.log('🔍 BCBA Dashboard - User:', { id: user.id, email: user.email, role: user.role })
 
       // Get assigned clients
+      console.log('📋 Fetching assigned clients...')
       const assignedClients = await Client.query()
         .where('assigned_bcba', user.id)
         .where('status', 'active')
         .preload('assignedRbts')
+      console.log(`✅ Found ${assignedClients.length} assigned clients`)
 
       // Get supervised RBTs
+      console.log('👥 Fetching supervised RBTs...')
       const supervisedRbts = await User.query()
         .where('supervisor_id', user.id)
         .where('role', 'RBT')
         .where('is_active', true)
+      console.log(`✅ Found ${supervisedRbts.length} supervised RBTs`)
 
       // Get pending session reviews
+      console.log('📊 Fetching pending reviews...')
       const pendingReviews = await SessionLog.query()
         .where('bcba_id', user.id)
         .where('status', 'submitted')
         .count('* as total')
+      console.log(`✅ Found ${pendingReviews[0]?.$extras?.total || 0} pending reviews`)
 
       // Get recent sessions for review
+      console.log('📝 Fetching recent sessions...')
       const recentSessions = await SessionLog.query()
         .where('bcba_id', user.id)
         .whereIn('status', ['submitted', 'bcba_approved'])
@@ -43,15 +51,18 @@ export default class BCBAController {
         .preload('rbt')
         .orderBy('created_at', 'desc')
         .limit(10)
+      console.log(`✅ Found ${recentSessions.length} recent sessions`)
 
       // Calculate average quality score (mock calculation)
+      console.log('📈 Calculating quality score...')
       const approvedSessions = await SessionLog.query()
         .where('bcba_id', user.id)
         .where('bcba_approved', true)
-
       const averageQualityScore = approvedSessions.length > 0 ? 4.2 : 0
+      console.log(`✅ Average quality score: ${averageQualityScore}`)
 
       // Get monthly session statistics
+      console.log('📅 Fetching monthly stats...')
       const currentMonth = new Date()
       const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)
       const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0)
@@ -74,44 +85,53 @@ export default class BCBAController {
           monthlyStats[stat.status as keyof typeof monthlyStats] = stat.$extras.total
         }
       })
+      console.log('✅ Monthly stats calculated:', monthlyStats)
 
-      return response.json({
+      // Build response with null-safe operations
+      console.log('🔧 Building response...')
+      const dashboardResponse = {
         summary: {
           activeClients: assignedClients.length,
           supervisedRbts: supervisedRbts.length,
-          pendingReviews: pendingReviews[0].$extras.total,
+          pendingReviews: pendingReviews[0]?.$extras?.total || 0,
           averageQualityScore,
         },
         assignedClients: assignedClients.map(client => ({
           id: client.id,
-          fullName: client.fullName,
-          age: client.age,
-          status: client.status,
-          assignedRbts: client.assignedRbts.map(rbt => rbt.name),
-          admissionDate: client.admissionDate.toISODate(),
+          fullName: client.fullName || `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown Client',
+          age: client.age || 0,
+          status: client.status || 'unknown',
+          assignedRbts: client.assignedRbts?.map(rbt => rbt.name || 'Unknown RBT') || [],
+          admissionDate: client.admissionDate?.toISODate() || null,
         })),
         supervisedRbts: supervisedRbts.map(rbt => ({
           id: rbt.id,
-          name: rbt.name,
-          email: rbt.email,
-          hourlyRate: rbt.hourlyRate,
-          isActive: rbt.isActive,
+          name: rbt.name || 'Unknown RBT',
+          email: rbt.email || '',
+          hourlyRate: rbt.hourlyRate || 0,
+          isActive: rbt.isActive || false,
         })),
         recentSessions: recentSessions.map(session => ({
           id: session.id,
-          clientName: session.client?.fullName,
-          rbtName: session.rbt?.name,
-          date: session.date.toISODate(),
-          duration: session.duration,
-          status: session.status,
-          createdAt: session.createdAt.toISO(),
+          clientName: session.client?.fullName || 'Unknown Client',
+          rbtName: session.rbt?.name || 'Unknown RBT',
+          date: session.date?.toISODate() || null,
+          duration: session.duration || 0,
+          status: session.status || 'unknown',
+          createdAt: session.createdAt?.toISO() || null,
         })),
         monthlyStats,
-      })
+      }
+
+      console.log('✅ BCBA Dashboard response built successfully')
+      return response.json(dashboardResponse)
     } catch (error) {
+      console.error('❌ BCBA Dashboard Error:', error)
+      console.error('Stack trace:', error.stack)
       return response.status(500).json({
         message: 'Failed to fetch BCBA dashboard',
         error: error.message,
+        details: error.stack?.split('\n').slice(0, 5).join('\n')
       })
     }
   }
