@@ -60,6 +60,18 @@ export default class SessionLog extends BaseModel {
   declare parentSignature: string | null
 
   @column()
+  declare environmentNotes: string | null
+
+  @column()
+  declare engagementScore: number | null
+
+  @column()
+  declare offlineMode: boolean
+
+  @column.dateTime()
+  declare syncedAt: DateTime | null
+
+  @column()
   declare status: 'draft' | 'submitted' | 'bcba_approved' | 'clinic_approved' | 'approved' | 'rejected'
 
   @column()

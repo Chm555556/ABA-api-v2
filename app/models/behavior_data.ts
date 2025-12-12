@@ -30,6 +30,28 @@ export default class BehaviorData extends BaseModel {
   @column()
   declare percentage: number
 
+  // Enhanced behavior tracking fields
+  @column()
+  declare durationSeconds: number | null
+
+  @column()
+  declare frequencyCount: number | null
+
+  @column()
+  declare antecedent: string | null
+
+  @column()
+  declare consequence: string | null
+
+  @column()
+  declare environmentNotes: string | null
+
+  @column()
+  declare baselineValue: number | null
+
+  @column()
+  declare measurementUnit: string | null
+
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 

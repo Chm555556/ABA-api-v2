@@ -232,7 +232,7 @@ export default class RBTController {
       const session = await SessionLog.create({
         clientId: client.id,
         rbtId: user.id,
-        bcbaId: client.assignedBcba!,
+        bcbaId: client.assignedBcba || null,
         date: now,
         startTime,
         endTime: startTime, // Will be updated when session ends
@@ -977,6 +977,676 @@ export default class RBTController {
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch schedule',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get current active session for RBT
+   */
+  async getActiveSession({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+
+      console.log(`🔍 Looking for active session for RBT ${user.id}`)
+
+      const activeSession = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('treatmentGoals', (goalsQuery) => {
+              goalsQuery.where('status', 'active')
+            })
+            .preload('parent')
+            .preload('bcba')
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .orderBy('created_at', 'desc')
+        .first()
+
+      if (!activeSession) {
+        console.log(`✅ No active session found for RBT ${user.id}`)
+        return response.json({ data: null })
+      }
+
+      console.log(`✅ Found active session ${activeSession.id} for RBT ${user.id}`)
+
+      return response.json({
+        data: {
+          id: activeSession.id,
+          sessionType: 'one_to_one', // SessionLog doesn't support group sessions yet
+          clientId: activeSession.clientId,
+          
+          // Client Information
+          client: activeSession.client ? {
+            id: activeSession.client.id,
+            fullName: `${activeSession.client.firstName} ${activeSession.client.lastName}`,
+            firstName: activeSession.client.firstName,
+            lastName: activeSession.client.lastName,
+            age: activeSession.client.age,
+            dateOfBirth: activeSession.client.dateOfBirth.toISODate(),
+            status: activeSession.client.status,
+            diagnosis: activeSession.client.diagnosis || [],
+          } : null,
+
+          // Parent Information
+          parent: activeSession.client?.parent ? {
+            id: activeSession.client.parent.id,
+            name: activeSession.client.parent.name,
+            email: activeSession.client.parent.email,
+            phone: activeSession.client.parent.phone || '',
+          } : null,
+
+          // Treatment Goals
+          treatmentGoals: activeSession.client?.treatmentGoals?.map(goal => ({
+            id: goal.id,
+            title: goal.title,
+            description: goal.description,
+            targetBehavior: goal.targetBehavior,
+            measurementType: goal.measurementType,
+            masteryCriteria: goal.masteryCriteria,
+            status: goal.status,
+            domain: goal.domain,
+          })) || [],
+
+          // Session Details
+          date: activeSession.date.toISODate(),
+          startTime: activeSession.startTime,
+          endTime: activeSession.endTime,
+          location: activeSession.location,
+          status: activeSession.status,
+          sessionNotes: activeSession.sessionNotes || '',
+          
+          // RBT Information
+          rbt: activeSession.rbt ? {
+            id: activeSession.rbt.id,
+            name: activeSession.rbt.name,
+            email: activeSession.rbt.email,
+          } : null,
+
+          // BCBA Information
+          bcba: activeSession.bcba ? {
+            id: activeSession.bcba.id,
+            name: activeSession.bcba.name,
+            email: activeSession.bcba.email,
+          } : null,
+
+          createdAt: activeSession.createdAt.toISO(),
+          updatedAt: activeSession.updatedAt?.toISO() || null,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error getting active session:', error)
+      return response.status(500).json({
+        message: 'Failed to get active session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get session status for validation
+   */
+  async getSessionStatus({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`🔍 Checking session status for session ${sessionId}, RBT ${user.id}`)
+
+      const session = await SessionLog.find(sessionId)
+
+      const result = {
+        exists: !!session,
+        belongsToUser: session?.rbtId === user.id,
+        status: session?.status || null,
+        canBeEnded: session?.status === 'draft' && session?.rbtId === user.id,
+        sessionId: session?.id || null,
+        rbtId: session?.rbtId || null,
+        currentUserId: user.id,
+      }
+
+      console.log(`✅ Session status check result:`, result)
+
+      return response.json(result)
+    } catch (error) {
+      console.error('❌ Error checking session status:', error)
+      return response.status(500).json({
+        message: 'Failed to check session status',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Record individual trial (real-time)
+   */
+  async recordTrial({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        prompt, 
+        response: trialResponse, 
+        reinforcement, 
+        notes,
+        durationSeconds,
+        antecedent,
+        consequence
+      } = request.only([
+        'sessionId',
+        'goalId', 
+        'prompt', 
+        'response', 
+        'reinforcement', 
+        'notes',
+        'durationSeconds',
+        'antecedent',
+        'consequence'
+      ])
+
+      console.log(`📝 Recording trial for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create trial record
+      const trial = await Trial.create({
+        sessionId,
+        goalId,
+        prompt: prompt || '',
+        response: trialResponse,
+        reinforcement: reinforcement || '',
+        notes: notes || '',
+        timestamp: DateTime.now(),
+        durationSeconds: durationSeconds || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+      })
+
+      console.log(`✅ Trial recorded: ${trial.id}`)
+
+      return response.status(201).json({
+        message: 'Trial recorded successfully',
+        data: {
+          id: trial.id,
+          sessionId: trial.sessionId,
+          goalId: trial.goalId,
+          goalTitle: goal.title,
+          prompt: trial.prompt,
+          response: trial.response,
+          reinforcement: trial.reinforcement,
+          notes: trial.notes,
+          timestamp: trial.timestamp.toISO(),
+          durationSeconds: trial.durationSeconds,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording trial:', error)
+      return response.status(400).json({
+        message: 'Failed to record trial',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Auto-save session data (for real-time updates)
+   */
+  async autoSaveSession({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+      const { sessionNotes, environmentNotes, engagementScore } = request.only([
+        'sessionNotes',
+        'environmentNotes', 
+        'engagementScore'
+      ])
+
+      console.log(`💾 Auto-saving session ${sessionId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Update only provided fields
+      if (sessionNotes !== undefined) {
+        session.sessionNotes = sessionNotes
+      }
+      if (environmentNotes !== undefined) {
+        session.environmentNotes = environmentNotes
+      }
+      if (engagementScore !== undefined && engagementScore !== null) {
+        const score = parseInt(engagementScore)
+        if (score >= 1 && score <= 5) {
+          session.engagementScore = score
+        }
+      }
+
+      await session.save()
+
+      console.log(`✅ Session ${sessionId} auto-saved`)
+
+      return response.json({
+        message: 'Session auto-saved successfully',
+        data: {
+          id: session.id,
+          sessionNotes: session.sessionNotes,
+          environmentNotes: session.environmentNotes,
+          engagementScore: session.engagementScore,
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error auto-saving session:', error)
+      return response.status(400).json({
+        message: 'Failed to auto-save session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Submit session for BCBA review
+   */
+  async submitSessionForReview({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📤 Submitting session ${sessionId} for review`)
+
+      // Verify session belongs to RBT and is in draft status
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Validate session has required data
+      if (!session.sessionNotes || session.sessionNotes.trim().length === 0) {
+        return response.status(400).json({
+          message: 'Session notes are required before submission',
+        })
+      }
+
+      // Update session status
+      session.status = 'submitted'
+      await session.save()
+
+      console.log(`✅ Session ${sessionId} submitted for review`)
+
+      return response.json({
+        message: 'Session submitted for BCBA review successfully',
+        data: {
+          id: session.id,
+          status: session.status,
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error submitting session for review:', error)
+      return response.status(400).json({
+        message: 'Failed to submit session for review',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Record behavior data with enhanced tracking
+   */
+  async recordBehavior({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        durationSeconds,
+        frequencyCount,
+        antecedent,
+        consequence,
+        environmentNotes,
+        measurementUnit,
+        baselineValue
+      } = request.only([
+        'sessionId',
+        'goalId',
+        'durationSeconds',
+        'frequencyCount', 
+        'antecedent',
+        'consequence',
+        'environmentNotes',
+        'measurementUnit',
+        'baselineValue'
+      ])
+
+      console.log(`📊 Recording behavior data for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create behavior data record
+      const behaviorData = await BehaviorData.create({
+        sessionId,
+        goalId,
+        correct: 0, // Will be calculated from trials
+        incorrect: 0,
+        prompted: 0,
+        total: 0,
+        percentage: 0,
+        durationSeconds: durationSeconds || null,
+        frequencyCount: frequencyCount || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+        environmentNotes: environmentNotes || null,
+        measurementUnit: measurementUnit || null,
+        baselineValue: baselineValue || null,
+      })
+
+      console.log(`✅ Behavior data recorded: ${behaviorData.id}`)
+
+      return response.status(201).json({
+        message: 'Behavior data recorded successfully',
+        data: {
+          id: behaviorData.id,
+          sessionId: behaviorData.sessionId,
+          goalId: behaviorData.goalId,
+          goalTitle: goal.title,
+          durationSeconds: behaviorData.durationSeconds,
+          frequencyCount: behaviorData.frequencyCount,
+          antecedent: behaviorData.antecedent,
+          consequence: behaviorData.consequence,
+          environmentNotes: behaviorData.environmentNotes,
+          createdAt: behaviorData.createdAt.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording behavior data:', error)
+      return response.status(400).json({
+        message: 'Failed to record behavior data',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Enhanced record trial with detailed tracking
+   */
+  async recordEnhancedTrial({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        prompt, 
+        response: trialResponse, 
+        reinforcement, 
+        notes,
+        durationSeconds,
+        antecedent,
+        consequence,
+        promptType,
+        promptLevel,
+        independent,
+        errorCorrection
+      } = request.only([
+        'sessionId',
+        'goalId', 
+        'prompt', 
+        'response', 
+        'reinforcement', 
+        'notes',
+        'durationSeconds',
+        'antecedent',
+        'consequence',
+        'promptType',
+        'promptLevel',
+        'independent',
+        'errorCorrection'
+      ])
+
+      console.log(`📝 Recording enhanced trial for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create enhanced trial record
+      const trial = await Trial.create({
+        sessionId,
+        goalId,
+        prompt: prompt || '',
+        response: trialResponse,
+        reinforcement: reinforcement || '',
+        notes: notes || '',
+        timestamp: DateTime.now(),
+        durationSeconds: durationSeconds || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+        promptType: promptType || null,
+        promptLevel: promptLevel || null,
+        independent: independent || false,
+        errorCorrection: errorCorrection || null,
+      })
+
+      console.log(`✅ Enhanced trial recorded: ${trial.id}`)
+
+      return response.status(201).json({
+        message: 'Enhanced trial recorded successfully',
+        data: {
+          id: trial.id,
+          sessionId: trial.sessionId,
+          goalId: trial.goalId,
+          goalTitle: goal.title,
+          prompt: trial.prompt,
+          response: trial.response,
+          reinforcement: trial.reinforcement,
+          notes: trial.notes,
+          timestamp: trial.timestamp.toISO(),
+          durationSeconds: trial.durationSeconds,
+          promptType: trial.promptType,
+          promptLevel: trial.promptLevel,
+          independent: trial.independent,
+          errorCorrection: trial.errorCorrection,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording enhanced trial:', error)
+      return response.status(400).json({
+        message: 'Failed to record enhanced trial',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Calculate and store session analytics
+   */
+  async calculateSessionAnalytics({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📊 Calculating session analytics for session ${sessionId}`)
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .firstOrFail()
+
+      // Import analytics service
+      const TrialAnalyticsService = (await import('#services/trial_analytics_service')).default
+
+      // Calculate comprehensive analytics
+      const analytics = await TrialAnalyticsService.calculateSessionAnalytics(sessionId)
+
+      // Store behavior data for each goal
+      for (const goalAnalytics of analytics.goalAnalytics) {
+        await TrialAnalyticsService.storeBehaviorData(sessionId, goalAnalytics.goalId, goalAnalytics)
+      }
+
+      console.log(`✅ Session analytics calculated and stored for session ${sessionId}`)
+
+      return response.json({
+        message: 'Session analytics calculated successfully',
+        data: analytics
+      })
+    } catch (error) {
+      console.error('❌ Error calculating session analytics:', error)
+      return response.status(400).json({
+        message: 'Failed to calculate session analytics',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get session analytics
+   */
+  async getSessionAnalytics({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📊 Getting analytics for session ${sessionId}`)
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .preload('client', (clientQuery) => {
+          clientQuery.preload('treatmentGoals')
+        })
+        .firstOrFail()
+
+      // Get all trials for this session (using direct session relationship)
+      const trials = await Trial.query()
+        .where('session_id', sessionId)
+        .orderBy('timestamp', 'asc')
+
+      // Get behavior data summaries
+      const behaviorData = await BehaviorData.query()
+        .where('session_id', sessionId)
+
+      // Get treatment goals for this session's client
+      const treatmentGoals = session.clientId ? await TreatmentGoal.query()
+        .where('client_id', session.clientId)
+        .where('status', 'active') : []
+
+      // Create goals map for lookup
+      const goalsMap = new Map(treatmentGoals.map(goal => [goal.id, goal]))
+
+      // Calculate analytics
+      const goalProgress: { [key: string]: any } = {}
+      const trialsByGoal: { [key: string]: any[] } = {}
+
+      // Group trials by goal
+      trials.forEach(trial => {
+        const goalId = trial.goalId?.toString()
+        if (goalId && !trialsByGoal[goalId]) {
+          trialsByGoal[goalId] = []
+        }
+        if (goalId) {
+          trialsByGoal[goalId].push(trial)
+        }
+      })
+
+      // Calculate progress for each goal
+      Object.keys(trialsByGoal).forEach(goalId => {
+        const goalTrials = trialsByGoal[goalId]
+        const goal = goalsMap.get(parseInt(goalId))
+        const correct = goalTrials.filter((t: any) => t.response === 'correct').length
+        const incorrect = goalTrials.filter((t: any) => t.response === 'incorrect').length
+        const prompted = goalTrials.filter((t: any) => t.response === 'prompted').length
+        const total = goalTrials.length
+
+        goalProgress[goalId] = {
+          goalId: parseInt(goalId),
+          goalTitle: goal?.title || 'Unknown Goal',
+          totalTrials: total,
+          correct,
+          incorrect,
+          prompted,
+          percentage: total > 0 ? Math.round((correct / total) * 100) : 0,
+          averageDuration: goalTrials
+            .filter((t: any) => t.durationSeconds)
+            .reduce((sum: number, t: any) => sum + (t.durationSeconds || 0), 0) / 
+            goalTrials.filter((t: any) => t.durationSeconds).length || 0
+        }
+      })
+
+      // Calculate session summary
+      const totalTrials = trials.length
+      const totalCorrect = trials.filter(t => t.response === 'correct').length
+      const sessionDuration = session.duration || 0
+      const trialsPerMinute = sessionDuration > 0 ? totalTrials / sessionDuration : 0
+
+      console.log(`✅ Analytics calculated for session ${sessionId}`)
+
+      return response.json({
+        data: {
+          sessionId: session.id,
+          sessionSummary: {
+            totalTrials,
+            totalCorrect,
+            overallPercentage: totalTrials > 0 ? Math.round((totalCorrect / totalTrials) * 100) : 0,
+            sessionDuration,
+            trialsPerMinute: Math.round(trialsPerMinute * 100) / 100,
+            engagementScore: session.engagementScore,
+          },
+          goalProgress: Object.values(goalProgress),
+          trialTimeline: trials.map(trial => ({
+            id: trial.id,
+            goalId: trial.goalId,
+            goalTitle: trial.goal?.title || 'Unknown Goal',
+            timestamp: trial.timestamp.toISO(),
+            response: trial.response,
+            durationSeconds: trial.durationSeconds,
+          })),
+          behaviorDataSummary: behaviorData.map(bd => ({
+            id: bd.id,
+            goalId: bd.goalId,
+            goalTitle: bd.goal?.title || 'Unknown Goal',
+            correct: bd.correct,
+            incorrect: bd.incorrect,
+            prompted: bd.prompted,
+            percentage: bd.percentage,
+          })),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error getting session analytics:', error)
+      return response.status(400).json({
+        message: 'Failed to get session analytics',
         error: error.message,
       })
     }

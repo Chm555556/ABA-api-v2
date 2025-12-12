@@ -125,6 +125,13 @@ router.group(() => {
       router.get('/clients', [RBTController, 'getAssignedClients'])
       router.get('/schedule', [RBTController, 'getSchedule'])
       router.get('/sessions/history', [RBTController, 'getSessionHistory'])
+      
+      // Enhanced session management (specific routes first)
+      router.get('/sessions/active', [RBTController, 'getActiveSession'])
+      router.get('/sessions/:id/status', [RBTController, 'getSessionStatus'])
+      router.get('/sessions/:id/analytics', [RBTController, 'getSessionAnalytics'])
+      
+      // Generic session detail (must come after specific routes)
       router.get('/sessions/:id', [RBTController, 'getSessionDetail'])
       
       // Session management
@@ -132,6 +139,12 @@ router.group(() => {
       router.put('/sessions/:id/end', [RBTController, 'endSession'])
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
+      router.post('/sessions/record-trial', [RBTController, 'recordTrial'])
+      router.post('/sessions/record-enhanced-trial', [RBTController, 'recordEnhancedTrial'])
+      router.post('/sessions/record-behavior', [RBTController, 'recordBehavior'])
+      router.post('/sessions/:id/calculate-analytics', [RBTController, 'calculateSessionAnalytics'])
+      router.put('/sessions/:id/auto-save', [RBTController, 'autoSaveSession'])
+      router.put('/sessions/:id/submit-for-review', [RBTController, 'submitSessionForReview'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
 
     // Scheduler routes
