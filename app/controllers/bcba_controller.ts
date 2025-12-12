@@ -861,22 +861,33 @@ export default class BCBAController {
   }
 
   /**
-   * Get users (RBTs supervised by this BCBA)
+   * Get users (RBTs and BCBAs for session creation)
    */
   async getUsers({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
       const role = request.input('role')
+      const limit = request.input('limit', 1000)
 
+      // For session creation, BCBAs need access to all RBTs and BCBAs, not just supervised ones
       let query = User.query()
-        .where('supervisor_id', user.id)
+        .whereIn('role', ['RBT', 'BCBA'])
         .where('is_active', true)
 
       if (role) {
         query = query.where('role', role)
       }
 
-      const users = await query.orderBy('name', 'asc')
+      const users = await query
+        .orderBy('name', 'asc')
+        .limit(limit)
+
+      console.log(`🔍 BCBA getUsers: Found ${users.length} users for BCBA ${user.name}`)
+      console.log(`📋 Users breakdown:`, {
+        rbts: users.filter(u => u.role === 'RBT').length,
+        bcbas: users.filter(u => u.role === 'BCBA').length,
+        currentUserIncluded: users.some(u => u.id === user.id)
+      })
 
       return response.json({
         data: users.map(u => ({
@@ -885,7 +896,8 @@ export default class BCBAController {
           email: u.email,
           role: u.role,
           isActive: u.isActive,
-          phone: u.phone
+          phone: u.phone,
+          clinicId: u.clinicId
         }))
       })
     } catch (error) {
