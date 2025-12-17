@@ -145,6 +145,17 @@ router.group(() => {
       router.post('/sessions/:id/calculate-analytics', [RBTController, 'calculateSessionAnalytics'])
       router.put('/sessions/:id/auto-save', [RBTController, 'autoSaveSession'])
       router.put('/sessions/:id/submit-for-review', [RBTController, 'submitSessionForReview'])
+      
+      // Clinical Analytics routes
+      router.post('/clinical-analytics/feedback', [RBTController, 'submitClinicalFeedback'])
+      router.get('/clinical-analytics/metrics', [RBTController, 'getClinicalAnalyticsMetrics'])
+      
+      // Progress Insights routes
+      router.get('/progress-insights/metrics', [RBTController, 'getProgressInsightsMetrics'])
+      router.post('/progress-insights/feedback', [RBTController, 'submitProgressFeedback'])
+      
+      // Treatment Goals routes
+      router.post('/treatment-goals', [RBTController, 'createTreatmentGoal'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
 
     // Scheduler routes

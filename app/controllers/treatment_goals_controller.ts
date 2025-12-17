@@ -122,7 +122,7 @@ export default class TreatmentGoalsController {
         'goalPhase',
       ])
 
-      // Verify BCBA has access to this client
+      // Verify user has access to this client
       const client = await Client.findOrFail(clientId)
       
       if (user.role === 'BCBA' && client.assignedBcba !== user.id) {
@@ -135,6 +135,22 @@ export default class TreatmentGoalsController {
         return response.status(403).json({
           message: 'Access denied to this client',
         })
+      }
+
+      if (user.role === 'RBT') {
+        // Verify RBT has access to this client
+        const hasAccess = await Client.query()
+          .where('id', clientId)
+          .whereHas('assignedRbts', (rbtQuery) => {
+            rbtQuery.where('users.id', user.id)
+          })
+          .first()
+
+        if (!hasAccess) {
+          return response.status(403).json({
+            message: 'Access denied to this client',
+          })
+        }
       }
 
       const goal = await TreatmentGoal.create({
