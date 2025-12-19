@@ -187,7 +187,8 @@ export default class RBTController {
             targetBehavior: goal.targetBehavior,
             measurementType: goal.measurementType,
             masteryCriteria: goal.masteryCriteria,
-            status: goal.status,BCBA Dashboard            // Program Builder fields
+            status: goal.status,
+            // Program Builder fields
             domain: goal.domain,
             promptHierarchy: goal.promptHierarchy,
             baselineScore: goal.baselineScore,
@@ -402,6 +403,329 @@ export default class RBTController {
   }
 
   /**
+   * Complete a session with comprehensive data (goals, feedback, progress)
+   */
+  async completeSession({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+      const {
+        overallSessionFeedback,
+        overallSessionProgress,
+        clientGoalsData, // Array of client goals with feedback and progress
+        sessionNotes,
+        parentSignature
+      } = request.only([
+        'overallSessionFeedback',
+        'overallSessionProgress', 
+        'clientGoalsData',
+        'sessionNotes',
+        'parentSignature'
+      ])
+
+      console.log('🔄 Completing session:', {
+        sessionId,
+        sessionIdType: typeof sessionId,
+        userId: user.id,
+        hasOverallFeedback: !!overallSessionFeedback,
+        overallProgress: overallSessionProgress,
+        overallProgressType: typeof overallSessionProgress,
+        clientGoalsCount: clientGoalsData?.length || 0,
+        clientGoalsDataType: typeof clientGoalsData,
+        requestBody: request.body()
+      })
+
+      // Validate session ID
+      if (!sessionId || isNaN(parseInt(sessionId))) {
+        console.log('❌ Invalid session ID:', sessionId)
+        return response.status(400).json({
+          message: 'Invalid session ID provided',
+          error: 'INVALID_SESSION_ID'
+        })
+      }
+
+      // Get the session
+      console.log(`🔍 Looking for session ${sessionId} for RBT ${user.id}`)
+      
+      // First check if session exists at all
+      const anySession = await SessionLog.query()
+        .where('id', sessionId)
+        .first()
+
+      if (!anySession) {
+        console.log(`❌ Session ${sessionId} does not exist in database`)
+        return response.status(404).json({
+          message: `Session with ID ${sessionId} does not exist`,
+          error: 'SESSION_NOT_FOUND'
+        })
+      }
+
+      console.log(`📋 Session ${sessionId} exists:`, {
+        id: anySession.id,
+        rbtId: anySession.rbtId,
+        status: anySession.status,
+        clientId: anySession.clientId
+      })
+
+      // Check if session belongs to this RBT
+      if (anySession.rbtId !== user.id) {
+        console.log(`❌ Session ${sessionId} belongs to RBT ${anySession.rbtId}, not ${user.id}`)
+        return response.status(403).json({
+          message: 'You do not have permission to complete this session',
+          error: 'ACCESS_DENIED'
+        })
+      }
+
+      // Check if session is in draft status
+      if (anySession.status !== 'draft') {
+        console.log(`❌ Session ${sessionId} is in status '${anySession.status}', not 'draft'`)
+        return response.status(400).json({
+          message: `Session is in '${anySession.status}' status and cannot be completed. Only draft sessions can be completed.`,
+          error: 'INVALID_SESSION_STATUS'
+        })
+      }
+      
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .preload('client')
+        .first()
+
+      if (!session) {
+        console.log(`❌ Unexpected error: Session ${sessionId} passed validation but query failed`)
+        return response.status(500).json({
+          message: 'Unexpected error during session lookup',
+          error: 'INTERNAL_ERROR'
+        })
+      }
+
+      console.log(`✅ Found session ${sessionId} for client ${session.client?.fullName || 'Unknown'}`)
+
+      const now = DateTime.now()
+      const endTime = now.toFormat('HH:mm')
+
+      // Calculate duration in minutes
+      const [startHour, startMin] = session.startTime.split(':').map(Number)
+      const [endHour, endMin] = endTime.split(':').map(Number)
+      const duration = (endHour * 60 + endMin) - (startHour * 60 + startMin)
+      const totalHours = Math.round((duration / 60) * 100) / 100
+
+      // Update session with completion data
+      session.endTime = endTime
+      session.duration = duration
+      session.totalHours = totalHours
+      session.sessionNotes = sessionNotes || ''
+      session.parentSignature = parentSignature
+      session.status = 'completed'
+
+      // Validate and store session-level feedback and progress
+      console.log('🔍 Validating session data...')
+      
+      // Validate overallProgress
+      let validProgress = 0
+      if (overallSessionProgress !== undefined && overallSessionProgress !== null) {
+        const progressNum = Number(overallSessionProgress)
+        if (isNaN(progressNum)) {
+          console.log('❌ Invalid overallProgress value:', overallSessionProgress)
+          return response.status(400).json({
+            message: 'overallSessionProgress must be a number',
+            error: 'INVALID_PROGRESS_VALUE'
+          })
+        }
+        if (progressNum < 0 || progressNum > 100) {
+          console.log('❌ overallProgress out of range:', progressNum)
+          return response.status(400).json({
+            message: 'overallSessionProgress must be between 0 and 100',
+            error: 'PROGRESS_OUT_OF_RANGE'
+          })
+        }
+        validProgress = progressNum
+      }
+
+      // Validate clientGoalsData
+      let validClientGoalsData = []
+      if (clientGoalsData !== undefined && clientGoalsData !== null) {
+        if (!Array.isArray(clientGoalsData)) {
+          console.log('❌ clientGoalsData is not an array:', typeof clientGoalsData)
+          return response.status(400).json({
+            message: 'clientGoalsData must be an array',
+            error: 'INVALID_GOALS_DATA_TYPE'
+          })
+        }
+        validClientGoalsData = clientGoalsData
+      }
+
+      // Store session-level feedback and progress
+      session.overallFeedback = overallSessionFeedback || ''
+      session.overallProgress = validProgress
+      session.clientGoalsData = validClientGoalsData
+
+      console.log('💾 Saving session with validated data:', {
+        overallFeedback: session.overallFeedback?.substring(0, 50) + '...',
+        overallProgress: session.overallProgress,
+        clientGoalsDataCount: session.clientGoalsData.length,
+        sessionNotes: sessionNotes?.substring(0, 30) + '...'
+      })
+
+      try {
+        await session.save()
+        console.log('✅ Session saved successfully')
+      } catch (saveError) {
+        console.error('❌ Error saving session:', {
+          message: saveError.message,
+          code: saveError.code,
+          constraint: saveError.constraint,
+          detail: saveError.detail,
+          stack: saveError.stack?.split('\n').slice(0, 3)
+        })
+        
+        // Provide more specific error messages based on the error type
+        if (saveError.code === 'ER_DATA_TOO_LONG') {
+          return response.status(400).json({
+            message: 'One of the text fields is too long for the database',
+            error: 'DATA_TOO_LONG'
+          })
+        } else if (saveError.code === 'ER_BAD_NULL_ERROR') {
+          return response.status(400).json({
+            message: 'A required field is missing',
+            error: 'MISSING_REQUIRED_FIELD'
+          })
+        } else {
+          return response.status(500).json({
+            message: 'Database error while saving session',
+            error: 'DATABASE_ERROR',
+            details: saveError.message
+          })
+        }
+      }
+
+      // Also save individual goal progress if provided
+      if (clientGoalsData && Array.isArray(clientGoalsData)) {
+        for (const clientData of clientGoalsData) {
+          if (clientData.goals && Array.isArray(clientData.goals)) {
+            for (const goalData of clientData.goals) {
+              // Save basic behavior data entry for tracking
+              // Note: BehaviorData model is designed for trial-based data
+              // We'll create a basic entry to track that this goal was worked on
+              try {
+                await BehaviorData.create({
+                  sessionId: session.id, // Correct field name
+                  goalId: goalData.goalId,
+                  correct: 0, // Will be updated when trials are recorded
+                  incorrect: 0,
+                  prompted: 0,
+                  total: 0,
+                  percentage: goalData.actualScore || 0, // Use actual score as percentage
+                  environmentNotes: goalData.feedback || null,
+                })
+              } catch (behaviorDataError) {
+                console.warn(`⚠️ Could not create behavior data for goal ${goalData.goalId}:`, behaviorDataError.message)
+                // Continue with session completion even if behavior data creation fails
+              }
+            }
+          }
+        }
+      }
+
+      return response.json({
+        message: 'Session completed successfully',
+        data: {
+          id: session.id,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          status: session.status,
+          overallFeedback: session.overallFeedback,
+          overallProgress: session.overallProgress,
+          clientGoalsCount: clientGoalsData?.length || 0,
+          updatedAt: session.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error completing session:', error)
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n')
+      })
+      
+      // Provide more specific error messages
+      if (error.code === 'E_ROW_NOT_FOUND') {
+        return response.status(404).json({
+          message: 'Session not found or you do not have permission to complete it',
+          error: 'SESSION_NOT_FOUND'
+        })
+      }
+      
+      return response.status(400).json({
+        message: 'Failed to complete session',
+        error: error.message,
+        details: 'Check server logs for more information'
+      })
+    }
+  }
+
+  /**
+   * Save session feedback and progress (for intermediate saves)
+   */
+  async saveSessionFeedback({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        sessionId,
+        overallSessionFeedback,
+        overallSessionProgress,
+        sessionType,
+        location,
+        duration
+      } = request.only([
+        'sessionId',
+        'overallSessionFeedback',
+        'overallSessionProgress',
+        'sessionType',
+        'location',
+        'duration'
+      ])
+
+      console.log('💾 Saving session feedback:', {
+        sessionId,
+        overallSessionFeedback: overallSessionFeedback?.substring(0, 50) + '...',
+        overallSessionProgress
+      })
+
+      // Find the session
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Update session with feedback and progress
+      session.overallFeedback = overallSessionFeedback || ''
+      session.overallProgress = overallSessionProgress || 0
+
+      await session.save()
+
+      return response.json({
+        message: 'Session feedback saved successfully',
+        data: {
+          id: session.id,
+          overallFeedback: session.overallFeedback,
+          overallProgress: session.overallProgress,
+          updatedAt: session.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error saving session feedback:', error)
+      return response.status(400).json({
+        message: 'Failed to save session feedback',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
    * Log behavior data
    */
   async logBehaviorData({ auth, request, response }: HttpContext) {
@@ -572,6 +896,259 @@ export default class RBTController {
     } catch (error) {
       return response.status(500).json({
         message: 'Failed to fetch session history',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get completed sessions with comprehensive data
+   */
+  async getCompletedSessions({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const page = request.input('page', 1)
+      const limit = request.input('limit', 10)
+      const clientId = request.input('clientId')
+
+      console.log(`🔍 Loading completed sessions for RBT ${user.id}`)
+
+      // First, let's check what sessions exist for this RBT
+      const allSessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .select('id', 'status', 'date', 'client_id')
+        .orderBy('date', 'desc')
+        .limit(10)
+
+      console.log(`📊 Found ${allSessions.length} total sessions for RBT ${user.id}:`)
+      allSessions.forEach(s => {
+        console.log(`   - Session ${s.id}: ${s.status}, Date: ${s.date.toISODate()}, Client: ${s.clientId}`)
+      })
+
+      let query = SessionLog.query()
+        .where('rbt_id', user.id)
+        .whereIn('status', ['completed', 'submitted'])
+        .preload('client')
+        .preload('behaviorData', (behaviorQuery) => {
+          behaviorQuery.orderBy('created_at', 'desc')
+        })
+
+      if (clientId) {
+        query = query.where('client_id', clientId)
+      }
+
+      const sessions = await query
+        .orderBy('date', 'desc')
+        .orderBy('start_time', 'desc')
+        .paginate(page, limit)
+
+      console.log(`📊 Found ${sessions.all().length} completed/submitted sessions`)
+
+      const responseData = {
+        data: sessions.all().map(session => {
+          // Parse client goals data if it exists
+          let clientGoalsData = []
+          try {
+            clientGoalsData = session.clientGoalsData ? JSON.parse(session.clientGoalsData) : []
+          } catch (e) {
+            console.warn('Failed to parse client goals data for session', session.id)
+            clientGoalsData = []
+          }
+
+          return {
+            id: session.id,
+            clientId: session.clientId,
+            clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
+            date: session.date.toISODate(),
+            startTime: session.startTime,
+            endTime: session.endTime,
+            duration: session.duration,
+            totalHours: session.totalHours,
+            location: session.location,
+            sessionNotes: session.sessionNotes,
+            status: session.status,
+            bcbaApproved: session.bcbaApproved,
+            
+            // Session-level data
+            overallFeedback: session.overallFeedback || '',
+            overallProgress: session.overallProgress || 0,
+            
+            // Client goals data
+            clientGoalsData: clientGoalsData,
+            
+            // Behavior data
+            behaviorData: session.behaviorData?.map(data => ({
+              id: data.id,
+              goalId: data.goalId,
+              goalName: data.goalName,
+              targetScore: data.targetScore,
+              actualScore: data.actualScore,
+              improvement: data.improvement,
+              feedback: data.feedback,
+              date: data.date?.toISODate(),
+            })) || [],
+            
+            createdAt: session.createdAt.toISO(),
+            updatedAt: session.updatedAt?.toISO(),
+          }
+        }),
+        meta: sessions.getMeta(),
+      }
+
+      console.log(`✅ Returning ${responseData.data.length} completed sessions for RBT ${user.id}`)
+      if (responseData.data.length > 0) {
+        console.log('   Sample session:', {
+          id: responseData.data[0].id,
+          clientName: responseData.data[0].clientName,
+          status: responseData.data[0].status,
+          date: responseData.data[0].date
+        })
+      }
+
+      return response.json(responseData)
+    } catch (error) {
+      console.error('❌ Error fetching completed sessions:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch completed sessions',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get detailed completed session by ID
+   */
+  async getCompletedSessionById({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'completed')
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('bcba')
+            .preload('parent')
+            .preload('clinic')
+        })
+        .preload('behaviorData')
+        .firstOrFail()
+
+      // Parse client goals data
+      let clientGoalsData = []
+      try {
+        clientGoalsData = session.clientGoalsData ? JSON.parse(session.clientGoalsData) : []
+      } catch (e) {
+        console.warn('Failed to parse client goals data for session', session.id)
+        clientGoalsData = []
+      }
+
+      return response.json({
+        data: {
+          id: session.id,
+          clientId: session.clientId,
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          location: session.location,
+          sessionNotes: session.sessionNotes,
+          status: session.status,
+          bcbaApproved: session.bcbaApproved,
+          
+          // Session-level data
+          overallFeedback: session.overallFeedback || '',
+          overallProgress: session.overallProgress || 0,
+          
+          // Complete client information
+          client: session.client ? {
+            id: session.client.id,
+            firstName: session.client.firstName,
+            lastName: session.client.lastName,
+            fullName: `${session.client.firstName} ${session.client.lastName}`,
+            age: session.client.age,
+            dateOfBirth: session.client.dateOfBirth?.toISODate(),
+            diagnosis: session.client.diagnosis,
+            status: session.client.status,
+            
+            // Contact Information
+            phone: session.client.phone,
+            email: session.client.email,
+            address: {
+              street: session.client.street,
+              city: session.client.city,
+              state: session.client.state,
+              zipCode: session.client.zipCode,
+            },
+            
+            // Emergency Contact
+            emergencyContact: {
+              name: session.client.emergencyContactName,
+              relationship: session.client.emergencyContactRelationship,
+              phone: session.client.emergencyContactPhone,
+            },
+            
+            // Insurance Information
+            insurance: {
+              type: session.client.insuranceType,
+              id: session.client.insuranceId,
+            },
+            
+            // Dates
+            admissionDate: session.client.admissionDate?.toISODate(),
+            dischargeDate: session.client.dischargeDate?.toISODate(),
+            
+            // Related Information
+            bcba: session.client.bcba ? {
+              id: session.client.bcba.id,
+              name: session.client.bcba.name,
+              email: session.client.bcba.email,
+              phone: session.client.bcba.phone || null,
+            } : null,
+            
+            parent: session.client.parent ? {
+              id: session.client.parent.id,
+              name: session.client.parent.name,
+              email: session.client.parent.email,
+              phone: session.client.parent.phone || null,
+            } : null,
+            
+            clinic: session.client.clinic ? {
+              id: session.client.clinic.id,
+              name: session.client.clinic.name,
+              address: session.client.clinic.address,
+              phone: session.client.clinic.phone,
+              email: session.client.clinic.email,
+            } : null,
+          } : null,
+          
+          // Client goals data with feedback and progress
+          clientGoalsData: clientGoalsData,
+          
+          // Individual behavior data entries
+          behaviorData: session.behaviorData?.map(data => ({
+            id: data.id,
+            goalId: data.goalId,
+            goalName: data.goalName,
+            targetScore: data.targetScore,
+            actualScore: data.actualScore,
+            improvement: data.improvement,
+            feedback: data.feedback,
+            date: data.date?.toISODate(),
+          })) || [],
+          
+          createdAt: session.createdAt.toISO(),
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error fetching completed session details:', error)
+      return response.status(404).json({
+        message: 'Completed session not found',
         error: error.message,
       })
     }

@@ -128,6 +128,8 @@ router.group(() => {
       
       // Enhanced session management (specific routes first)
       router.get('/sessions/active', [RBTController, 'getActiveSession'])
+      router.get('/sessions/completed', [RBTController, 'getCompletedSessions'])
+      router.get('/sessions/completed/:id', [RBTController, 'getCompletedSessionById'])
       router.get('/sessions/:id/status', [RBTController, 'getSessionStatus'])
       router.get('/sessions/:id/analytics', [RBTController, 'getSessionAnalytics'])
       
@@ -137,6 +139,8 @@ router.group(() => {
       // Session management
       router.post('/sessions/start', [RBTController, 'startSession'])
       router.put('/sessions/:id/end', [RBTController, 'endSession'])
+      router.post('/sessions/:id/complete', [RBTController, 'completeSession'])
+      router.post('/sessions/feedback', [RBTController, 'saveSessionFeedback'])
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
       router.post('/sessions/record-trial', [RBTController, 'recordTrial'])

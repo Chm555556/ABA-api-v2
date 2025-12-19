@@ -72,7 +72,7 @@ export default class SessionLog extends BaseModel {
   declare syncedAt: DateTime | null
 
   @column()
-  declare status: 'draft' | 'submitted' | 'bcba_approved' | 'clinic_approved' | 'approved' | 'rejected'
+  declare status: 'draft' | 'submitted' | 'completed' | 'bcba_approved' | 'clinic_approved' | 'approved' | 'rejected'
 
   @column()
   declare bcbaApproved: boolean
@@ -97,6 +97,26 @@ export default class SessionLog extends BaseModel {
 
   @column()
   declare clinicNotes: string | null
+
+  // Session completion fields
+  @column()
+  declare overallFeedback: string | null
+
+  @column()
+  declare overallProgress: number | null
+
+  @column({
+    prepare: (value: any[] | null) => (value ? JSON.stringify(value) : null),
+    consume: (value: string | null) => {
+      if (!value) return null
+      try {
+        return JSON.parse(value)
+      } catch {
+        return null
+      }
+    },
+  })
+  declare clientGoalsData: any[] | null
 
   @column()
   declare isRecurring: boolean
