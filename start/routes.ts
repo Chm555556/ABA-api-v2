@@ -141,6 +141,7 @@ router.group(() => {
       router.put('/sessions/:id/end', [RBTController, 'endSession'])
       router.post('/sessions/:id/complete', [RBTController, 'completeSession'])
       router.post('/sessions/feedback', [RBTController, 'saveSessionFeedback'])
+      router.post('/sessions/client-rating', [RBTController, 'saveClientRating'])
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
       router.post('/sessions/record-trial', [RBTController, 'recordTrial'])

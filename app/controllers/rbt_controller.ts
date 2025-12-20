@@ -930,7 +930,9 @@ export default class RBTController {
         .whereIn('status', ['completed', 'submitted'])
         .preload('client')
         .preload('behaviorData', (behaviorQuery) => {
-          behaviorQuery.orderBy('created_at', 'desc')
+          behaviorQuery
+            .preload('goal')
+            .orderBy('created_at', 'desc')
         })
 
       if (clientId) {
@@ -980,12 +982,17 @@ export default class RBTController {
             behaviorData: session.behaviorData?.map(data => ({
               id: data.id,
               goalId: data.goalId,
-              goalName: data.goalName,
-              targetScore: data.targetScore,
-              actualScore: data.actualScore,
-              improvement: data.improvement,
-              feedback: data.feedback,
-              date: data.date?.toISODate(),
+              goalName: data.goal?.title || 'Behavior Data Point',
+              targetScore: data.goal?.targetPercentage || null,
+              actualScore: data.percentage || null,
+              improvement: null, // Could be calculated if needed
+              feedback: data.environmentNotes || null,
+              correct: data.correct,
+              incorrect: data.incorrect,
+              prompted: data.prompted,
+              total: data.total,
+              percentage: data.percentage,
+              date: data.createdAt?.toISODate(),
             })) || [],
             
             createdAt: session.createdAt.toISO(),
@@ -1033,7 +1040,9 @@ export default class RBTController {
             .preload('parent')
             .preload('clinic')
         })
-        .preload('behaviorData')
+        .preload('behaviorData', (behaviorQuery) => {
+          behaviorQuery.preload('goal')
+        })
         .firstOrFail()
 
       // Parse client goals data
@@ -1043,6 +1052,18 @@ export default class RBTController {
       } catch (e) {
         console.warn('Failed to parse client goals data for session', session.id)
         clientGoalsData = []
+      }
+
+      // Parse client ratings from session notes
+      let clientRatings = {}
+      try {
+        if (session.sessionNotes) {
+          const sessionData = JSON.parse(session.sessionNotes)
+          clientRatings = sessionData.clientRatings || {}
+        }
+      } catch (e) {
+        console.warn('Failed to parse client ratings from session notes', session.id)
+        clientRatings = {}
       }
 
       return response.json({
@@ -1129,16 +1150,24 @@ export default class RBTController {
           // Client goals data with feedback and progress
           clientGoalsData: clientGoalsData,
           
+          // Client ratings from RBT
+          clientRatings: clientRatings,
+          
           // Individual behavior data entries
           behaviorData: session.behaviorData?.map(data => ({
             id: data.id,
             goalId: data.goalId,
-            goalName: data.goalName,
-            targetScore: data.targetScore,
-            actualScore: data.actualScore,
-            improvement: data.improvement,
-            feedback: data.feedback,
-            date: data.date?.toISODate(),
+            goalName: data.goal?.title || 'Behavior Data Point',
+            targetScore: data.goal?.targetPercentage || null,
+            actualScore: data.percentage || null,
+            improvement: null, // Could be calculated if needed
+            feedback: data.environmentNotes || null,
+            correct: data.correct,
+            incorrect: data.incorrect,
+            prompted: data.prompted,
+            total: data.total,
+            percentage: data.percentage,
+            date: data.createdAt?.toISODate(),
           })) || [],
           
           createdAt: session.createdAt.toISO(),
@@ -3175,6 +3204,87 @@ ${feedbackData.parentFeedback ? `PARENT FEEDBACK:\n${feedbackData.parentFeedback
       console.error('❌ Error getting session analytics:', error)
       return response.status(400).json({
         message: 'Failed to get session analytics',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Save client rating for session
+   */
+  async saveClientRating({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { sessionId, clientId, rating, date } = request.only([
+        'sessionId',
+        'clientId', 
+        'rating',
+        'date'
+      ])
+
+      console.log('⭐ Saving client rating:', {
+        userId: user.id,
+        sessionId,
+        clientId,
+        rating,
+        date
+      })
+
+      // Validate rating (1-5 stars)
+      if (!rating || rating < 1 || rating > 5) {
+        return response.status(400).json({
+          message: 'Rating must be between 1 and 5 stars'
+        })
+      }
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .first()
+
+      if (!session) {
+        return response.status(404).json({
+          message: 'Session not found or not authorized'
+        })
+      }
+
+      // For now, we'll store the rating in the session notes or create a separate table
+      // Since we don't have a dedicated client_ratings table, we'll store it as JSON in session
+      let sessionData = session.sessionNotes ? JSON.parse(session.sessionNotes) : {}
+      
+      // Initialize clientRatings if it doesn't exist
+      if (!sessionData.clientRatings) {
+        sessionData.clientRatings = {}
+      }
+      
+      // Store the rating
+      sessionData.clientRatings[clientId] = {
+        rating,
+        ratedAt: new Date().toISOString(),
+        ratedBy: user.id
+      }
+
+      // Update session with rating data
+      await session.merge({
+        sessionNotes: JSON.stringify(sessionData)
+      }).save()
+
+      console.log('✅ Client rating saved successfully')
+
+      return response.json({
+        message: 'Client rating saved successfully',
+        data: {
+          sessionId,
+          clientId,
+          rating,
+          savedAt: new Date().toISOString()
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error saving client rating:', error)
+      return response.status(500).json({
+        message: 'Failed to save client rating',
         error: error.message,
       })
     }
