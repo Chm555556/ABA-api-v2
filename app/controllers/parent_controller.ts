@@ -16,16 +16,12 @@ export default class ParentController {
       const user = auth.user!
       console.log('🔵 Parent dashboard called for user:', user.id, user.email, user.role)
 
-      // Find children associated with this parent (assuming parent email matches client email or similar logic)
+      // Find children associated with this parent using the proper parentId relationship
       const children = await Client.query()
-        .where('email', user.email)
-        .orWhere((builder) => {
-          // You might need to implement a proper parent-child relationship
-          // For now, we'll use a simple email match or create a parent_clients table
-          builder.where('emergency_contact_name', 'like', `%${user.name}%`)
-        })
+        .where('parentId', user.id)
         .preload('assignedRbts')
         .preload('bcba')
+        .preload('parent')
 
       console.log('🔵 Found children:', children.length)
 
@@ -127,7 +123,7 @@ export default class ParentController {
   }
 
   /**
-   * Get child's schedule
+   * Get child's schedule - includes ALL session types (one-to-one, group, community)
    */
   async getSchedule({ auth, params, request, response }: HttpContext) {
     try {
@@ -136,49 +132,151 @@ export default class ParentController {
       const startDate = request.input('startDate')
       const endDate = request.input('endDate')
 
-      // Verify parent has access to this child
+      console.log('🔵 Parent getSchedule called:', { clientId, startDate, endDate, parentId: user.id })
+
+      // Verify parent has access to this child using parentId
       const child = await Client.query()
         .where('id', clientId)
-        .where((builder) => {
-          builder
-            .where('email', user.email)
-            .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
-        })
+        .where('parentId', user.id)
         .firstOrFail()
 
-      let query = Schedule.query()
+      // Query 1: Get scheduled sessions from Schedule table
+      let scheduleQuery = Schedule.query()
         .where('client_id', child.id)
         .preload('rbt')
         .preload('bcba')
+        .preload('client')
 
       if (startDate) {
-        query = query.where('date', '>=', startDate)
+        scheduleQuery = scheduleQuery.where('date', '>=', startDate)
       }
 
       if (endDate) {
-        query = query.where('date', '<=', endDate)
+        scheduleQuery = scheduleQuery.where('date', '<=', endDate)
       }
 
-      const schedules = await query
-        .orderBy('date', 'asc')
+      const schedules = await scheduleQuery
+        .orderBy('date', 'desc')
         .orderBy('start_time', 'asc')
 
-      return response.json({
-        data: schedules.map(schedule => ({
-          id: schedule.id,
+      // Query 2: Get actual sessions from SessionLog table (includes all session types)
+      let sessionLogQuery = SessionLog.query()
+        .where((builder) => {
+          // One-to-one sessions where this child is the primary client
+          builder.where('client_id', child.id)
+          // OR group/community sessions where this child is a participant
+          builder.orWhereHas('participants', (participantQuery) => {
+            participantQuery.where('client_id', child.id)
+          })
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .preload('client')
+        .preload('participants', (participantQuery) => {
+          participantQuery.preload('client')
+        })
+
+      if (startDate) {
+        sessionLogQuery = sessionLogQuery.where('date', '>=', startDate)
+      }
+
+      if (endDate) {
+        sessionLogQuery = sessionLogQuery.where('date', '<=', endDate)
+      }
+
+      const sessionLogs = await sessionLogQuery
+        .orderBy('date', 'desc')
+        .orderBy('start_time', 'asc')
+
+      console.log('🔵 Found schedules:', schedules.length)
+      console.log('🔵 Found session logs:', sessionLogs.length)
+
+      // Combine and format all sessions
+      const allSessions: any[] = []
+
+      // Add scheduled sessions (from Schedule table)
+      schedules.forEach(schedule => {
+        allSessions.push({
+          id: `schedule_${schedule.id}`,
+          originalId: schedule.id,
+          type: 'schedule',
+          sessionType: 'one_to_one', // Schedule table only supports one-to-one
+          clientId: child.id,
           clientName: child.fullName,
-          therapistName: schedule.rbt.name,
-          bcbaName: schedule.bcba.name,
-          date: schedule.date.toISODate(),
-          startTime: schedule.startTime,
-          endTime: schedule.endTime,
-          time: schedule.time,
-          location: schedule.location,
-          status: schedule.status,
-          notes: schedule.notes,
-        })),
+          therapistName: schedule.rbt?.name || 'Not assigned',
+          rbtName: schedule.rbt?.name || 'Not assigned',
+          bcbaName: schedule.bcba?.name || 'Not assigned',
+          date: schedule.date?.toISODate() || null,
+          startTime: schedule.startTime || 'TBD',
+          endTime: schedule.endTime || 'TBD',
+          time: schedule.time || `${schedule.startTime} - ${schedule.endTime}`,
+          location: schedule.location || 'Location TBD',
+          status: schedule.status || 'scheduled',
+          notes: schedule.notes || null,
+          participants: [], // Schedule doesn't have participants
+          participantCount: 1,
+        })
+      })
+
+      // Add actual sessions (from SessionLog table) - includes all session types
+      sessionLogs.forEach(session => {
+        // For group/community sessions, check if this child is a participant
+        const isParticipant = session.participants?.some(p => p.clientId === child.id)
+        const isPrimaryClient = session.clientId === child.id
+
+        if (isPrimaryClient || isParticipant) {
+          allSessions.push({
+            id: `session_${session.id}`,
+            originalId: session.id,
+            type: 'session_log',
+            sessionType: session.sessionType || 'one_to_one',
+            clientId: session.clientId || child.id, // Use child.id for group sessions
+            clientName: session.client?.fullName || child.fullName,
+            therapistName: session.rbt?.name || 'Not assigned',
+            rbtName: session.rbt?.name || 'Not assigned',
+            bcbaName: session.bcba?.name || 'Not assigned',
+            date: session.date?.toISODate() || null,
+            startTime: session.startTime || 'TBD',
+            endTime: session.endTime || 'TBD',
+            time: `${session.startTime} - ${session.endTime}`,
+            location: session.location || 'Location TBD',
+            status: session.status || 'completed',
+            notes: session.sessionNotes || null,
+            cptCode: session.cptCode || null,
+            serviceType: session.serviceType || null,
+            duration: session.duration || null,
+            totalHours: session.totalHours || null,
+            participants: session.participants?.map(p => ({
+              id: p.id,
+              clientId: p.clientId,
+              clientName: p.client?.fullName || 'Unknown',
+            })) || [],
+            participantCount: session.sessionType === 'one_to_one' ? 1 : (session.participants?.length || 0),
+            isGroupSession: session.sessionType === 'group',
+            isCommunitySession: session.sessionType === 'community',
+          })
+        }
+      })
+
+      // Sort all sessions by date (most recent first) and then by start time
+      allSessions.sort((a, b) => {
+        const dateCompare = new Date(b.date).getTime() - new Date(a.date).getTime()
+        if (dateCompare !== 0) return dateCompare
+        return a.startTime.localeCompare(b.startTime)
+      })
+
+      console.log('🔵 Total sessions found:', allSessions.length)
+      console.log('🔵 Session types breakdown:', {
+        oneToOne: allSessions.filter(s => s.sessionType === 'one_to_one').length,
+        group: allSessions.filter(s => s.sessionType === 'group').length,
+        community: allSessions.filter(s => s.sessionType === 'community').length,
+      })
+
+      return response.json({
+        data: allSessions,
       })
     } catch (error) {
+      console.error('❌ Parent getSchedule error:', error)
       return response.status(500).json({
         message: 'Failed to fetch schedule',
         error: error.message,
@@ -194,14 +292,10 @@ export default class ParentController {
       const user = auth.user!
       const clientId = params.clientId
 
-      // Verify parent has access to this child
+      // Verify parent has access to this child using parentId
       const child = await Client.query()
         .where('id', clientId)
-        .where((builder) => {
-          builder
-            .where('email', user.email)
-            .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
-        })
+        .where('parentId', user.id)
         .firstOrFail()
 
       const reports = await ProgressReport.query()
@@ -367,14 +461,10 @@ export default class ParentController {
       const user = auth.user!
       const clientId = params.clientId
 
-      // Verify parent has access to this child
+      // Verify parent has access to this child using parentId
       const child = await Client.query()
         .where('id', clientId)
-        .where((builder) => {
-          builder
-            .where('email', user.email)
-            .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
-        })
+        .where('parentId', user.id)
         .firstOrFail()
 
       const documents = await ClientDocument.query()
@@ -448,14 +538,10 @@ export default class ParentController {
         })
       }
 
-      // Verify parent has access to this child
+      // Verify parent has access to this child using parentId
       const child = await Client.query()
         .where('id', clientId)
-        .where((builder) => {
-          builder
-            .where('email', user.email)
-            .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
-        })
+        .where('parentId', user.id)
         .first()
 
       if (!child) {
@@ -560,6 +646,7 @@ export default class ParentController {
         insuranceId: insuranceId || 'PENDING',
         clinicId: 1, // Default clinic - you may want to make this dynamic
         assignedBcba: null,
+        parentId: user.id, // Properly link to parent
         admissionDate: DateTime.now(),
         emergencyContactName: emergencyContactName || user.name,
         emergencyContactPhone: emergencyContactPhone || '',

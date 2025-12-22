@@ -28,10 +28,9 @@ export default class TreatmentGoalsController {
           })
         query = query.whereIn('client_id', assignedClients.map(c => c.id))
       } else if (user.role === 'PARENT') {
-        // Parents can see goals for their children
+        // Parents can see goals for their children using parentId
         const parentClients = await Client.query()
-          .where('email', user.email)
-          .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
+          .where('parentId', user.id)
         
         if (parentClients.length > 0) {
           query = query.whereIn('client_id', parentClients.map(c => c.id))
@@ -429,11 +428,7 @@ export default class TreatmentGoalsController {
       if (user.role === 'PARENT') {
         const hasAccess = await Client.query()
           .where('id', goal.clientId)
-          .where((builder) => {
-            builder
-              .where('email', user.email)
-              .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
-          })
+          .where('parentId', user.id)
           .first()
 
         if (!hasAccess) {

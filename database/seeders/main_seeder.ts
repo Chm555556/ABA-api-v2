@@ -179,6 +179,7 @@ export default class MainSeeder extends BaseSeeder {
       insuranceId: 'INS123456',
       clinicId: clinic.id,
       assignedBcba: bcba.id,
+      parentId: parent.id, // Link to parent
       status: 'active',
       admissionDate: DateTime.fromISO('2024-01-15'),
       diagnosis: ['Autism Spectrum Disorder', 'ADHD'],
@@ -201,6 +202,7 @@ export default class MainSeeder extends BaseSeeder {
       insuranceId: 'PRIV789012',
       clinicId: clinic.id,
       assignedBcba: bcba.id,
+      parentId: parent2.id, // Link to parent
       status: 'active',
       admissionDate: DateTime.fromISO('2024-02-01'),
       diagnosis: ['Autism Spectrum Disorder'],

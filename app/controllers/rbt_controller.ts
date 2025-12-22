@@ -3290,5 +3290,251 @@ ${feedbackData.parentFeedback ? `PARENT FEEDBACK:\n${feedbackData.parentFeedback
     }
   }
 
+  /**
+   * Save behavior assessment data
+   */
+  async saveBehaviorAssessment({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        sessionId,
+        clientId,
+        behaviorAssessment
+      } = request.only([
+        'sessionId',
+        'clientId',
+        'behaviorAssessment'
+      ])
+
+      console.log('🧠 Saving behavior assessment:', {
+        userId: user.id,
+        sessionId,
+        clientId,
+        hasBehaviorData: !!behaviorAssessment
+      })
+
+      // Validate required fields
+      if (!sessionId) {
+        return response.status(400).json({
+          message: 'Session ID is required'
+        })
+      }
+
+      if (!clientId) {
+        return response.status(400).json({
+          message: 'Client ID is required'
+        })
+      }
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .first()
+
+      if (!session) {
+        return response.status(404).json({
+          message: 'Session not found or not authorized'
+        })
+      }
+
+      // Verify client exists
+      const client = await Client.find(clientId)
+      if (!client) {
+        return response.status(404).json({
+          message: 'Client not found'
+        })
+      }
+
+      // Parse existing session notes to preserve other data
+      let sessionData: any = {}
+      try {
+        sessionData = session.sessionNotes ? JSON.parse(session.sessionNotes) : {}
+      } catch (parseError) {
+        // If session notes aren't valid JSON, start fresh but preserve the text
+        sessionData = {
+          originalNotes: session.sessionNotes || ''
+        }
+      }
+
+      // Initialize behaviorAssessments if it doesn't exist
+      if (!sessionData.behaviorAssessments) {
+        sessionData.behaviorAssessments = {}
+      }
+
+      // Store the behavior assessment data
+      sessionData.behaviorAssessments[clientId] = {
+        ...behaviorAssessment,
+        assessedAt: new Date().toISOString(),
+        assessedBy: user.id,
+        assessorName: user.name
+      }
+
+      // Update session with behavior assessment data
+      await session.merge({
+        sessionNotes: JSON.stringify(sessionData, null, 2)
+      }).save()
+
+      console.log('✅ Behavior assessment saved successfully')
+
+      return response.json({
+        message: 'Behavior assessment saved successfully',
+        data: {
+          sessionId,
+          clientId,
+          behaviorAssessment: sessionData.behaviorAssessments[clientId],
+          savedAt: new Date().toISOString()
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error saving behavior assessment:', error)
+      return response.status(500).json({
+        message: 'Failed to save behavior assessment',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get behavior assessments for a session
+   */
+  async getBehaviorAssessments({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📋 Getting behavior assessments for session ${sessionId}`)
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .first()
+
+      if (!session) {
+        return response.status(404).json({
+          message: 'Session not found or not authorized'
+        })
+      }
+
+      // Parse session notes to get behavior assessments
+      let behaviorAssessments = {}
+      try {
+        const sessionData = session.sessionNotes ? JSON.parse(session.sessionNotes) : {}
+        behaviorAssessments = sessionData.behaviorAssessments || {}
+      } catch (parseError) {
+        console.warn('Could not parse session notes for behavior assessments')
+      }
+
+      return response.json({
+        message: 'Behavior assessments retrieved successfully',
+        data: {
+          sessionId,
+          behaviorAssessments,
+          count: Object.keys(behaviorAssessments).length
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error getting behavior assessments:', error)
+      return response.status(500).json({
+        message: 'Failed to get behavior assessments',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Save client treatment duration
+   */
+  async saveClientTreatmentDuration({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        sessionId,
+        clientId,
+        sessionDuration,
+        totalDuration,
+        startTime,
+        endTime
+      } = request.only([
+        'sessionId',
+        'clientId',
+        'sessionDuration',
+        'totalDuration',
+        'startTime',
+        'endTime'
+      ])
+
+      console.log('⏱️ Saving client treatment duration:', {
+        userId: user.id,
+        sessionId,
+        clientId,
+        sessionDuration,
+        totalDuration
+      })
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .first()
+
+      if (!session) {
+        return response.status(404).json({
+          message: 'Session not found or not authorized'
+        })
+      }
+
+      // Parse existing session notes to preserve other data
+      let sessionData: any = {}
+      try {
+        sessionData = session.sessionNotes ? JSON.parse(session.sessionNotes) : {}
+      } catch (parseError) {
+        sessionData = {
+          originalNotes: session.sessionNotes || ''
+        }
+      }
+
+      // Initialize clientTreatmentTimes if it doesn't exist
+      if (!sessionData.clientTreatmentTimes) {
+        sessionData.clientTreatmentTimes = {}
+      }
+
+      // Store the treatment duration data
+      sessionData.clientTreatmentTimes[clientId] = {
+        sessionDuration,
+        totalDuration,
+        startTime,
+        endTime,
+        recordedAt: new Date().toISOString(),
+        recordedBy: user.id
+      }
+
+      // Update session with treatment duration data
+      await session.merge({
+        sessionNotes: JSON.stringify(sessionData, null, 2)
+      }).save()
+
+      console.log('✅ Client treatment duration saved successfully')
+
+      return response.json({
+        message: 'Client treatment duration saved successfully',
+        data: {
+          sessionId,
+          clientId,
+          sessionDuration,
+          totalDuration,
+          savedAt: new Date().toISOString()
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error saving client treatment duration:', error)
+      return response.status(500).json({
+        message: 'Failed to save client treatment duration',
+        error: error.message,
+      })
+    }
+  }
 
 }

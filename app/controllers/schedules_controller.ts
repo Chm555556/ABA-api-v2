@@ -27,10 +27,9 @@ export default class SchedulesController {
       } else if (user.role === 'BCBA') {
         query = query.where('bcba_id', user.id)
       } else if (user.role === 'PARENT') {
-        // Parents can see schedules for their children
+        // Parents can see schedules for their children using parentId
         const parentClients = await Client.query()
-          .where('email', user.email)
-          .orWhere('emergency_contact_name', 'like', `%${user.name}%`)
+          .where('parentId', user.id)
         
         if (parentClients.length > 0) {
           query = query.whereIn('client_id', parentClients.map(c => c.id))

@@ -159,6 +159,11 @@ router.group(() => {
       router.get('/progress-insights/metrics', [RBTController, 'getProgressInsightsMetrics'])
       router.post('/progress-insights/feedback', [RBTController, 'submitProgressFeedback'])
       
+      // Behavior Assessment routes
+      router.post('/behavior-assessments', [RBTController, 'saveBehaviorAssessment'])
+      router.get('/behavior-assessments/:id', [RBTController, 'getBehaviorAssessments'])
+      router.post('/sessions/client-treatment-duration', [RBTController, 'saveClientTreatmentDuration'])
+      
       // Treatment Goals routes
       router.post('/treatment-goals', [RBTController, 'createTreatmentGoal'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
