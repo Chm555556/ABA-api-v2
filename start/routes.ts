@@ -88,6 +88,7 @@ router.group(() => {
       router.put('/messages/:id/read', [ParentController, 'markMessageAsRead'])
       router.get('/clients/:clientId/schedule', [ParentController, 'getSchedule'])
       router.get('/clients/:clientId/progress-reports', [ParentController, 'getProgressReports'])
+      router.get('/clients/:clientId/progress-metrics', [ParentController, 'getProgressMetrics'])
       router.get('/clients/:clientId/documents', [ParentController, 'getDocuments'])
       router.post('/documents', [ParentController, 'uploadDocument'])
     }).prefix('/parent').use(middleware.role({ roles: ['PARENT'] }))
