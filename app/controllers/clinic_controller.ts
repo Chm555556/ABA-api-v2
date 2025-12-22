@@ -4,7 +4,7 @@ import User from '#models/user'
 import SessionLog from '#models/session_log'
 import Schedule from '#models/schedule'
 import Invoice from '#models/invoice'
-import db from '@adonisjs/lucid/services/db'
+import TreatmentGoal from '#models/treatment_goal'
 import { DateTime } from 'luxon'
 // import { createClientValidator, createScheduleValidator } from '#validators/client_validator'
 import {
@@ -33,72 +33,74 @@ export default class ClinicController {
           error: 'CLINIC_NOT_ASSIGNED',
         })
       }
+const clinicId = user.clinicId // Store in variable for TypeScript
 
-      // Get total clients for this clinic
-      const totalClientsResult = await db.rawQuery(
-        'SELECT COUNT(*) as total FROM clients WHERE clinic_id = ? AND status = ?',
-        [user.clinicId, 'active']
-      )
-      const totalClients = totalClientsResult[0]?.total || 0
+      // Get total active clients for this clinic using Lucid ORM
+      const totalClientsQuery = await Client.query()
+        .where('clinic_id', clinicId)
+        .where('status', 'active')
+        .count('* as total')
+      const totalClients = totalClientsQuery[0].$extras.total
 
-      // Get active staff for this clinic (all roles)
-      const activeStaffResult = await db.rawQuery(
-        'SELECT COUNT(*) as total FROM users WHERE clinic_id = ? AND is_active = 1 AND role IN (?, ?, ?, ?)',
-        [user.clinicId, 'BCBA', 'RBT', 'CLINIC', 'ADMIN']
-      )
-      const activeStaff = activeStaffResult[0]?.total || 0
+      // Get active staff for this clinic using Lucid ORM
+      const activeStaffQuery = await User.query()
+        .where('clinic_id', clinicId)
+        .where('is_active', true)
+        .whereIn('role', ['BCBA', 'RBT', 'CLINIC', 'ADMIN'])
+        .count('* as total')
+      const activeStaff = activeStaffQuery[0].$extras.total
 
-      // Get today's appointments
-      const today = new Date().toISOString().split('T')[0]
-      const todayAppointmentsResult = await db.rawQuery(
-        `SELECT COUNT(*) as total FROM schedules s 
-         JOIN clients c ON s.client_id = c.id 
-         WHERE c.clinic_id = ? AND DATE(s.date) = ?`,
-        [user.clinicId, today]
-      )
-      const todayAppointments = todayAppointmentsResult[0]?.total || 0
+      // Get today's appointments using Lucid ORM with relationships
+      const today = DateTime.now().toISODate()
+      const todayAppointmentsQuery = await Schedule.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', clinicId)
+        })
+        .whereRaw('DATE(date) = ?', [today])
+        .count('* as total')
+      const todayAppointments = todayAppointmentsQuery[0].$extras.total
 
-      // Calculate monthly revenue from approved sessions
-      const currentMonth = new Date()
-      const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).toISOString().split('T')[0]
-      const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).toISOString().split('T')[0]
+      // Calculate monthly revenue from approved sessions using Lucid ORM
+      const currentMonth = DateTime.now()
+      const monthStart = currentMonth.startOf('month')
+      const monthEnd = currentMonth.endOf('month')
 
-      const monthlySessionsResult = await db.rawQuery(
-        `SELECT SUM(total_hours) as totalHours FROM session_logs sl 
-         JOIN clients c ON sl.client_id = c.id 
-         WHERE c.clinic_id = ? AND sl.status = 'approved' 
-         AND DATE(sl.date) BETWEEN ? AND ?`,
-        [user.clinicId, monthStart, monthEnd]
-      )
-      const totalHours = monthlySessionsResult[0]?.totalHours || 0
+      const monthlySessions = await SessionLog.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', clinicId)
+        })
+        .where('status', 'approved')
+        .whereBetween('date', [monthStart.toISODate(), monthEnd.toISODate()])
+
+      const totalHours = monthlySessions.reduce((sum, session) => sum + session.totalHours, 0)
       const monthlyRevenue = Math.round(totalHours * 100) // $100 per hour
 
-      // Get pending claims (sessions that are submitted but not approved)
-      const pendingClaimsResult = await db.rawQuery(
-        `SELECT COUNT(*) as total FROM session_logs sl 
-         JOIN clients c ON sl.client_id = c.id 
-         WHERE c.clinic_id = ? AND sl.status = 'submitted'`,
-        [user.clinicId]
-      )
-      const pendingClaims = pendingClaimsResult[0]?.total || 0
+      // Get pending claims using Lucid ORM
+      const pendingClaimsQuery = await SessionLog.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', clinicId)
+        })
+        .where('status', 'submitted')
+        .count('* as total')
+      const pendingClaims = pendingClaimsQuery[0].$extras.total
 
-      // Calculate completion rate
-      const totalScheduledResult = await db.rawQuery(
-        `SELECT COUNT(*) as total FROM schedules s 
-         JOIN clients c ON s.client_id = c.id 
-         WHERE c.clinic_id = ? AND DATE(s.date) BETWEEN ? AND ?`,
-        [user.clinicId, monthStart, monthEnd]
-      )
-      const totalScheduled = totalScheduledResult[0]?.total || 0
+      // Calculate completion rate using Lucid ORM
+      const totalScheduledQuery = await Schedule.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', clinicId)
+        })
+        .whereBetween('date', [monthStart.toISODate(), monthEnd.toISODate()])
+        .count('* as total')
+      const totalScheduled = totalScheduledQuery[0].$extras.total
 
-      const completedScheduledResult = await db.rawQuery(
-        `SELECT COUNT(*) as total FROM schedules s 
-         JOIN clients c ON s.client_id = c.id 
-         WHERE c.clinic_id = ? AND s.status = 'completed' 
-         AND DATE(s.date) BETWEEN ? AND ?`,
-        [user.clinicId, monthStart, monthEnd]
-      )
-      const completedScheduled = completedScheduledResult[0]?.total || 0
+      const completedScheduledQuery = await Schedule.query()
+        .whereHas('client', (clientQuery) => {
+          clientQuery.where('clinic_id', clinicId)
+        })
+        .where('status', 'completed')
+        .whereBetween('date', [monthStart.toISODate(), monthEnd.toISODate()])
+        .count('* as total')
+      const completedScheduled = completedScheduledQuery[0].$extras.total
 
       const completionRate = totalScheduled > 0 
         ? Math.round((completedScheduled / totalScheduled) * 100) 
@@ -119,7 +121,7 @@ export default class ClinicController {
         success: true,
         summary,
         clinic: {
-          id: user.clinicId,
+          id: clinicId,
           name: 'ABA Connect Clinic',
         },
       })
@@ -1190,14 +1192,17 @@ async createSchedule({ auth, request, response }: HttpContext) {
           const approvalRate = totalSessions > 0 ? Math.round((approvedSessions / totalSessions) * 100) : 0
           const avgSessionDuration = totalSessions > 0 ? Math.round(totalHours / totalSessions * 60) : 0
 
-          // Get client count for this staff member
+          // Get client count for this staff member using Lucid ORM
           let clientCount = 0
           if (member.role === 'RBT') {
-            const clientRbts = await db.rawQuery(
-              'SELECT COUNT(DISTINCT client_id) as count FROM client_rbts WHERE rbt_id = ? AND status = "active"',
-              [member.id]
-            )
-            clientCount = clientRbts[0]?.count || 0
+            // Count clients assigned to this RBT using the many-to-many relationship
+            const clientsQuery = await Client.query()
+              .whereHas('assignedRbts', (rbtQuery) => {
+                rbtQuery.where('users.id', member.id)
+              })
+              .where('status', 'active')
+              .count('* as total')
+            clientCount = clientsQuery[0].$extras.total
           } else if (member.role === 'BCBA') {
             const clients = await Client.query()
               .where('assigned_bcba', member.id)
@@ -1427,11 +1432,10 @@ async createSchedule({ auth, request, response }: HttpContext) {
       // Get additional data for each client
       const patientsWithDetails = await Promise.all(
         clients.map(async (client) => {
-          // Get treatment goals
-          const treatmentGoals = await db.rawQuery(
-            'SELECT * FROM treatment_goals WHERE client_id = ? ORDER BY created_at DESC',
-            [client.id]
-          )
+          // Get treatment goals using Lucid ORM
+          const treatmentGoals = await TreatmentGoal.query()
+            .where('client_id', client.id)
+            .orderBy('created_at', 'desc')
 
           // Get sessions
           const sessions = await SessionLog.query()
@@ -1517,14 +1521,14 @@ async createSchedule({ auth, request, response }: HttpContext) {
             parents,
             documents,
             reports,
-            treatmentGoals: treatmentGoals.map((goal: any) => ({
+            treatmentGoals: treatmentGoals.map((goal) => ({
               id: goal.id,
-              title: goal.goal_text?.substring(0, 50) + '...' || 'Treatment Goal',
-              description: goal.goal_text || '',
+              title: goal.title || goal.description?.substring(0, 50) + '...' || 'Treatment Goal',
+              description: goal.description || '',
               status: goal.status || 'active',
-              targetBehavior: goal.target_behavior || '',
-              measurementMethod: goal.measurement_method || '',
-              targetCriteria: goal.target_criteria || '',
+              targetBehavior: goal.targetBehavior || '',
+              measurementMethod: goal.measurementType || '',
+              targetCriteria: goal.masteryCriteria || '',
               progress: Math.floor(Math.random() * 100), // Mock progress
             })),
             sessions: sessions.map(session => ({

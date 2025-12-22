@@ -7,7 +7,6 @@ import TreatmentGoal from '#models/treatment_goal'
 import ProgressReport from '#models/progress_report'
 import GoalProgress from '#models/goal_progress'
 import BehaviorData from '#models/behavior_data'
-import db from '@adonisjs/lucid/services/db'
 
 export default class BCBAController {
   /**
@@ -204,24 +203,8 @@ export default class BCBAController {
             state: client.clinic.state,
           } : null,
           treatmentGoals: client.treatmentGoals.map(goal => {
-            // Safely parse JSON fields with fallback for comma-separated strings
-            let promptHierarchy = null
-            if (goal.promptHierarchy) {
-              try {
-                // Try to parse as JSON first
-                promptHierarchy = JSON.parse(goal.promptHierarchy)
-              } catch (e) {
-                // If JSON parsing fails, try to split comma-separated string
-                if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
-                  promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
-                } else if (typeof goal.promptHierarchy === 'string') {
-                  // Single item, wrap in array
-                  promptHierarchy = [goal.promptHierarchy.trim()]
-                } else {
-                  promptHierarchy = null
-                }
-              }
-            }
+            // The model already handles JSON parsing for promptHierarchy
+            const promptHierarchy = goal.promptHierarchy || null
 
             return {
               id: goal.id,
@@ -785,73 +768,38 @@ export default class BCBAController {
       const user = auth.user!
       const clientId = request.input('clientId')
 
-      // Use raw SQL to avoid model serialization issues with new fields
-      let sqlQuery = `
-        SELECT 
-          tg.id,
-          tg.client_id as clientId,
-          tg.title,
-          tg.description,
-          tg.target_behavior as targetBehavior,
-          tg.measurement_type as measurementType,
-          tg.mastery_criteria as masteryCriteria,
-          tg.status,
-          tg.domain,
-          tg.prompt_hierarchy as promptHierarchy,
-          tg.baseline_score as baselineScore,
-          tg.baseline_trials as baselineTrials,
-          tg.target_percentage as targetPercentage,
-          tg.consecutive_sessions as consecutiveSessions,
-          tg.goal_phase as goalPhase,
-          tg.created_by as createdBy,
-          tg.created_at,
-          tg.updated_at,
-          CONCAT(c.first_name, ' ', c.last_name) as clientName
-        FROM treatment_goals tg
-        LEFT JOIN clients c ON tg.client_id = c.id
-        WHERE tg.created_by = ?
-      `
-      
-      const params = [user.id]
+      // Use Lucid ORM with relationships instead of raw SQL
+      let query = TreatmentGoal.query()
+        .where('created_by', user.id)
+        .preload('client')
+        .orderBy('created_at', 'desc')
       
       if (clientId) {
-        sqlQuery += ' AND tg.client_id = ?'
-        params.push(clientId)
+        query = query.where('client_id', clientId)
       }
       
-      sqlQuery += ' ORDER BY tg.created_at DESC'
-      
-      const rawResult = await db.rawQuery(sqlQuery, params)
-      const goals = rawResult[0] // Get the actual results from the first element
-
-
+      const goals = await query
 
       return response.json({
-        data: goals.map((goal: any) => {
+        data: goals.map((goal) => {
           // Safely parse JSON fields with fallback for comma-separated strings
           let promptHierarchy = null
           if (goal.promptHierarchy) {
             try {
-              // Try to parse as JSON first
-              promptHierarchy = JSON.parse(goal.promptHierarchy)
+              // The model already handles JSON parsing, but we need to ensure it's an array
+              promptHierarchy = Array.isArray(goal.promptHierarchy) 
+                ? goal.promptHierarchy 
+                : [goal.promptHierarchy]
             } catch (e) {
-              // If JSON parsing fails, try to split comma-separated string
-              if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
-                promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
-              } else if (typeof goal.promptHierarchy === 'string') {
-                // Single item, wrap in array
-                promptHierarchy = [goal.promptHierarchy.trim()]
-              } else {
-                console.warn('Failed to parse promptHierarchy:', goal.promptHierarchy)
-                promptHierarchy = null
-              }
+              console.warn('Failed to parse promptHierarchy:', goal.promptHierarchy)
+              promptHierarchy = null
             }
           }
 
           return {
             id: goal.id,
             clientId: goal.clientId,
-            clientName: goal.clientName || 'Unknown Client',
+            clientName: goal.client ? `${goal.client.firstName} ${goal.client.lastName}` : 'Unknown Client',
             title: goal.title || '',
             description: goal.description || '',
             targetBehavior: goal.targetBehavior || '',
@@ -866,8 +814,8 @@ export default class BCBAController {
             consecutiveSessions: goal.consecutiveSessions,
             goalPhase: goal.goalPhase || 'acquisition',
             createdBy: goal.createdBy,
-            createdAt: goal.created_at ? new Date(goal.created_at).toISOString() : new Date().toISOString(),
-            updatedAt: goal.updated_at ? new Date(goal.updated_at).toISOString() : null,
+            createdAt: goal.createdAt.toISO(),
+            updatedAt: goal.updatedAt?.toISO() || null,
           }
         })
       })
@@ -1681,14 +1629,11 @@ export default class BCBAController {
           console.log('🔵 Updating RBT assignments:', clientData.assignedRbts)
           console.log('🔵 Client ID:', client.id)
           
-          // Remove existing RBT assignments
-          const deleteResult = await db.rawQuery('DELETE FROM client_rbts WHERE client_id = ?', [client.id])
-          console.log('🔵 Deleted existing RBT assignments:', deleteResult)
-          
-          // Add new RBT assignments
+          // Use Lucid ORM many-to-many relationship to sync RBT assignments
           if (Array.isArray(clientData.assignedRbts) && clientData.assignedRbts.length > 0) {
             console.log('🔵 Looking for RBTs with IDs:', clientData.assignedRbts)
             
+            // Validate that all provided IDs are valid RBTs
             const rbts = await User.query()
               .whereIn('id', clientData.assignedRbts)
               .where('role', 'RBT')
@@ -1696,28 +1641,21 @@ export default class BCBAController {
             console.log('🔵 Found RBTs:', rbts.map(r => ({ id: r.id, name: r.name, role: r.role })))
             
             if (rbts.length > 0) {
-              const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+              // Use sync to replace all existing assignments with new ones
+              // This automatically handles DELETE and INSERT operations
+              const validRbtIds = rbts.map(rbt => rbt.id)
+              await client.related('assignedRbts').sync(validRbtIds)
               
-              for (const rbtId of clientData.assignedRbts) {
-                const rbt = rbts.find(r => r.id === rbtId)
-                if (rbt) {
-                  console.log('🔵 Inserting RBT assignment:', { clientId: client.id, rbtId, now })
-                  const insertResult = await db.rawQuery(
-                    'INSERT INTO client_rbts (client_id, rbt_id, assigned_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-                    [client.id, rbtId, now, now, now]
-                  )
-                  console.log('🔵 Insert result:', insertResult)
-                } else {
-                  console.warn('⚠️ RBT ID not found in valid RBTs:', rbtId)
-                }
-              }
-              
-              console.log('✅ RBT assignments updated successfully')
+              console.log('✅ RBT assignments updated successfully using Lucid ORM')
             } else {
               console.warn('⚠️ No valid RBTs found for IDs:', clientData.assignedRbts)
+              // Clear all assignments if no valid RBTs provided
+              await client.related('assignedRbts').detach()
             }
           } else {
-            console.log('🔵 No RBTs to assign (empty or not array)')
+            console.log('🔵 No RBTs to assign (empty or not array) - clearing assignments')
+            // Clear all RBT assignments
+            await client.related('assignedRbts').detach()
           }
         } catch (rbtError) {
           console.error('⚠️ RBT assignment update failed (non-fatal):', rbtError)
@@ -1906,7 +1844,7 @@ export default class BCBAController {
           console.log('🔵 Assigning RBTs:', clientData.assignedRbts)
           console.log('🔵 RBT IDs type:', typeof clientData.assignedRbts[0])
           
-          // Verify RBTs exist and are RBTs (removed supervisor check)
+          // Verify RBTs exist and are RBTs using Lucid ORM
           const rbts = await User.query()
             .whereIn('id', clientData.assignedRbts)
             .where('role', 'RBT')
@@ -1925,24 +1863,11 @@ export default class BCBAController {
               console.warn('⚠️ Found:', rbts.map(r => r.id))
             }
             
-            // Use raw SQL to insert into pivot table with assigned_at timestamp
-            const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
+            // Use Lucid ORM many-to-many relationship to attach RBTs
+            const validRbtIds = rbts.map(rbt => rbt.id)
+            await client.related('assignedRbts').attach(validRbtIds)
             
-            for (const rbtId of clientData.assignedRbts) {
-              // Check if this RBT exists in the valid RBTs list
-              if (rbts.find(r => r.id === rbtId)) {
-                console.log('🔵 Inserting RBT assignment:', { clientId: client.id, rbtId, now })
-                const result = await db.rawQuery(
-                  'INSERT INTO client_rbts (client_id, rbt_id, assigned_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-                  [client.id, rbtId, now, now, now]
-                )
-                console.log('🔵 Insert result:', result)
-              } else {
-                console.warn('⚠️ Skipping RBT ID (not in valid list):', rbtId)
-              }
-            }
-            
-            console.log('✅ RBTs assigned successfully')
+            console.log('✅ RBTs assigned successfully using Lucid ORM')
           }
         } catch (rbtError) {
           console.error('⚠️ RBT assignment failed (non-fatal):', rbtError)
