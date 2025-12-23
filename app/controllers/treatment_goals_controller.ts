@@ -2,7 +2,6 @@ import type { HttpContext } from '@adonisjs/core/http'
 import TreatmentGoal from '#models/treatment_goal'
 import Client from '#models/client'
 import BehaviorData from '#models/behavior_data'
-import BaselineData from '#models/baseline_data'
 
 export default class TreatmentGoalsController {
   /**
@@ -19,6 +18,9 @@ export default class TreatmentGoalsController {
         .preload('creator')
         .preload('baselineData', (baselineQuery) => {
           baselineQuery.orderBy('collectionDate', 'desc')
+        })
+        .preload('targetBehaviors', (targetQuery) => {
+          targetQuery.preload('creator').orderBy('createdAt', 'asc')
         })
 
       // Role-based filtering
@@ -85,6 +87,20 @@ export default class TreatmentGoalsController {
             trials: baseline.trials,
             collectionDate: baseline.collectionDate.toISODate(),
             notes: baseline.notes,
+          })),
+          targetBehaviors: goal.targetBehaviors.map(behavior => ({
+            id: behavior.id,
+            name: behavior.name,
+            description: behavior.description,
+            baselinePercentage: behavior.baselinePercentage,
+            intensity: behavior.intensity,
+            notes: behavior.notes,
+            status: behavior.status,
+            currentPercentage: behavior.currentPercentage,
+            masteryDate: behavior.masteryDate?.toISODate() || null,
+            createdBy: behavior.createdBy,
+            creatorName: behavior.creator?.name || null,
+            createdAt: behavior.createdAt.toISO(),
           })),
         })),
       })
@@ -385,6 +401,32 @@ export default class TreatmentGoalsController {
 
         await goal.load('client')
         await goal.load('creator')
+        
+        // Create target behaviors if provided
+        if (goalData.targetBehaviors && Array.isArray(goalData.targetBehaviors)) {
+          const TargetBehavior = (await import('#models/target_behavior')).default
+          
+          for (const behaviorData of goalData.targetBehaviors) {
+            if (behaviorData.name && behaviorData.name.trim()) {
+              await TargetBehavior.create({
+                goalId: goal.id,
+                name: behaviorData.name,
+                description: behaviorData.description || null,
+                baselinePercentage: behaviorData.baselinePercentage || null,
+                intensity: behaviorData.intensity || 'moderate',
+                notes: behaviorData.notes || null,
+                status: 'active',
+                createdBy: user.id,
+              })
+            }
+          }
+          
+          // Reload target behaviors
+          await goal.load('targetBehaviors', (targetQuery) => {
+            targetQuery.preload('creator').orderBy('createdAt', 'asc')
+          })
+        }
+        
         createdGoals.push(goal)
       }
 
@@ -410,6 +452,20 @@ export default class TreatmentGoalsController {
           createdBy: goal.createdBy,
           createdByName: goal.creator.name,
           createdAt: goal.createdAt.toISO(),
+          targetBehaviors: goal.targetBehaviors ? goal.targetBehaviors.map(behavior => ({
+            id: behavior.id,
+            name: behavior.name,
+            description: behavior.description,
+            baselinePercentage: behavior.baselinePercentage,
+            intensity: behavior.intensity,
+            notes: behavior.notes,
+            status: behavior.status,
+            currentPercentage: behavior.currentPercentage,
+            masteryDate: behavior.masteryDate?.toISODate() || null,
+            createdBy: behavior.createdBy,
+            creatorName: behavior.creator?.name || null,
+            createdAt: behavior.createdAt.toISO(),
+          })) : [],
         })),
       })
     } catch (error) {

@@ -6,6 +6,7 @@ import User from './user.js'
 import BehaviorData from './behavior_data.js'
 import GoalProgress from './goal_progress.js'
 import BaselineData from './baseline_data.js'
+import TargetBehavior from './target_behavior.js'
 
 export default class TreatmentGoal extends BaseModel {
   @column({ isPrimary: true })
@@ -102,4 +103,9 @@ export default class TreatmentGoal extends BaseModel {
     foreignKey: 'goalId',
   })
   declare baselineData: HasMany<typeof BaselineData>
+
+  @hasMany(() => TargetBehavior, {
+    foreignKey: 'goalId',
+  })
+  declare targetBehaviors: HasMany<typeof TargetBehavior>
 }
