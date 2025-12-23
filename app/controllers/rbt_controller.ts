@@ -1363,7 +1363,14 @@ export default class RBTController {
             .preload('bcba')
             .preload('parent')
             .preload('treatmentGoals', (goalsQuery) => {
-              goalsQuery.preload('creator')
+              goalsQuery
+                .preload('creator')
+                .preload('baselineData', (baselineQuery) => {
+                  baselineQuery.orderBy('collectionDate', 'desc')
+                })
+                .preload('targetBehaviors', (targetQuery) => {
+                  targetQuery.preload('creator').orderBy('createdAt', 'asc')
+                })
             })
         })
         .preload('rbt')
@@ -1495,6 +1502,32 @@ export default class RBTController {
               createdByName: goal.creator?.name || 'Unknown',
               createdAt: goal.createdAt.toISO(),
               updatedAt: goal.updatedAt?.toISO() || null,
+              // Enhanced baseline data and target behaviors
+              baselineData: goal.baselineData ? goal.baselineData.map((baseline: any) => ({
+                id: baseline.id,
+                score: baseline.score,
+                trials: baseline.trials,
+                collectionDate: baseline.collectionDate.toISODate(),
+                notes: baseline.notes,
+                sessionType: baseline.sessionType,
+                environment: baseline.environment,
+                duration: baseline.duration,
+                totalTrials: baseline.totalTrials,
+              })) : [],
+              targetBehaviors: goal.targetBehaviors ? goal.targetBehaviors.map((behavior: any) => ({
+                id: behavior.id,
+                name: behavior.name,
+                description: behavior.description,
+                baselinePercentage: behavior.baselinePercentage,
+                intensity: behavior.intensity,
+                notes: behavior.notes,
+                status: behavior.status,
+                currentPercentage: behavior.currentPercentage,
+                masteryDate: behavior.masteryDate?.toISODate() || null,
+                createdBy: behavior.createdBy,
+                creatorName: behavior.creator?.name || null,
+                createdAt: behavior.createdAt.toISO(),
+              })) : [],
             })) : [],
 
             // Session Details
@@ -1525,7 +1558,14 @@ export default class RBTController {
             .preload('bcba')
             .preload('parent')
             .preload('treatmentGoals', (goalsQuery) => {
-              goalsQuery.preload('creator')
+              goalsQuery
+                .preload('creator')
+                .preload('baselineData', (baselineQuery) => {
+                  baselineQuery.orderBy('collectionDate', 'desc')
+                })
+                .preload('targetBehaviors', (targetQuery) => {
+                  targetQuery.preload('creator').orderBy('createdAt', 'asc')
+                })
             })
         })
         .preload('participants', (participantsQuery) => {
@@ -1534,7 +1574,14 @@ export default class RBTController {
               .preload('bcba')
               .preload('parent')
               .preload('treatmentGoals', (goalsQuery) => {
-                goalsQuery.preload('creator')
+                goalsQuery
+                  .preload('creator')
+                  .preload('baselineData', (baselineQuery) => {
+                    baselineQuery.orderBy('collectionDate', 'desc')
+                  })
+                  .preload('targetBehaviors', (targetQuery) => {
+                    targetQuery.preload('creator').orderBy('createdAt', 'asc')
+                  })
               })
           })
         })
@@ -1689,6 +1736,32 @@ export default class RBTController {
               createdByName: goal.creator?.name || 'Unknown',
               createdAt: goal.createdAt.toISO(),
               updatedAt: goal.updatedAt?.toISO() || null,
+              // Enhanced baseline data and target behaviors
+              baselineData: goal.baselineData ? goal.baselineData.map((baseline: any) => ({
+                id: baseline.id,
+                score: baseline.score,
+                trials: baseline.trials,
+                collectionDate: baseline.collectionDate.toISODate(),
+                notes: baseline.notes,
+                sessionType: baseline.sessionType,
+                environment: baseline.environment,
+                duration: baseline.duration,
+                totalTrials: baseline.totalTrials,
+              })) : [],
+              targetBehaviors: goal.targetBehaviors ? goal.targetBehaviors.map((behavior: any) => ({
+                id: behavior.id,
+                name: behavior.name,
+                description: behavior.description,
+                baselinePercentage: behavior.baselinePercentage,
+                intensity: behavior.intensity,
+                notes: behavior.notes,
+                status: behavior.status,
+                currentPercentage: behavior.currentPercentage,
+                masteryDate: behavior.masteryDate?.toISODate() || null,
+                createdBy: behavior.createdBy,
+                creatorName: behavior.creator?.name || null,
+                createdAt: behavior.createdAt.toISO(),
+              })) : [],
             })) : [],
           })) : [],
 
@@ -1741,6 +1814,32 @@ export default class RBTController {
             createdByName: goal.creator?.name || 'Unknown',
             createdAt: goal.createdAt.toISO(),
             updatedAt: goal.updatedAt?.toISO() || null,
+            // Enhanced baseline data and target behaviors
+            baselineData: goal.baselineData ? goal.baselineData.map((baseline: any) => ({
+              id: baseline.id,
+              score: baseline.score,
+              trials: baseline.trials,
+              collectionDate: baseline.collectionDate.toISODate(),
+              notes: baseline.notes,
+              sessionType: baseline.sessionType,
+              environment: baseline.environment,
+              duration: baseline.duration,
+              totalTrials: baseline.totalTrials,
+            })) : [],
+            targetBehaviors: goal.targetBehaviors ? goal.targetBehaviors.map((behavior: any) => ({
+              id: behavior.id,
+              name: behavior.name,
+              description: behavior.description,
+              baselinePercentage: behavior.baselinePercentage,
+              intensity: behavior.intensity,
+              notes: behavior.notes,
+              status: behavior.status,
+              currentPercentage: behavior.currentPercentage,
+              masteryDate: behavior.masteryDate?.toISODate() || null,
+              createdBy: behavior.createdBy,
+              creatorName: behavior.creator?.name || null,
+              createdAt: behavior.createdAt.toISO(),
+            })) : [],
           })) : [],
 
           // Session Details
