@@ -5,6 +5,7 @@ import Client from './client.js'
 import User from './user.js'
 import BehaviorData from './behavior_data.js'
 import GoalProgress from './goal_progress.js'
+import BaselineData from './baseline_data.js'
 
 export default class TreatmentGoal extends BaseModel {
   @column({ isPrimary: true })
@@ -67,7 +68,7 @@ export default class TreatmentGoal extends BaseModel {
   declare consecutiveSessions: number | null
 
   @column()
-  declare goalPhase: 'acquisition' | 'maintenance' | 'mastered' | 'discontinued'
+  declare goalPhase: 'baseline' | 'acquisition' | 'maintenance' | 'mastered' | 'discontinued'
 
   @column()
   declare createdBy: number
@@ -96,4 +97,9 @@ export default class TreatmentGoal extends BaseModel {
     foreignKey: 'goalId',
   })
   declare goalProgress: HasMany<typeof GoalProgress>
+
+  @hasMany(() => BaselineData, {
+    foreignKey: 'goalId',
+  })
+  declare baselineData: HasMany<typeof BaselineData>
 }

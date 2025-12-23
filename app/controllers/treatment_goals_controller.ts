@@ -2,6 +2,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 import TreatmentGoal from '#models/treatment_goal'
 import Client from '#models/client'
 import BehaviorData from '#models/behavior_data'
+import BaselineData from '#models/baseline_data'
 
 export default class TreatmentGoalsController {
   /**
@@ -16,6 +17,9 @@ export default class TreatmentGoalsController {
       let query = TreatmentGoal.query()
         .preload('client')
         .preload('creator')
+        .preload('baselineData', (baselineQuery) => {
+          baselineQuery.orderBy('collectionDate', 'desc')
+        })
 
       // Role-based filtering
       if (user.role === 'BCBA') {
@@ -75,6 +79,13 @@ export default class TreatmentGoalsController {
           createdByName: goal.creator.name,
           createdAt: goal.createdAt.toISO(),
           updatedAt: goal.updatedAt?.toISO(),
+          baselineData: goal.baselineData.map(baseline => ({
+            id: baseline.id,
+            score: baseline.score,
+            trials: baseline.trials,
+            collectionDate: baseline.collectionDate.toISODate(),
+            notes: baseline.notes,
+          })),
         })),
       })
     } catch (error) {
@@ -166,7 +177,7 @@ export default class TreatmentGoalsController {
         baselineTrials,
         targetPercentage,
         consecutiveSessions,
-        goalPhase: goalPhase || 'acquisition',
+        goalPhase: goalPhase || 'baseline',
         createdBy: user.id,
       })
 
@@ -368,7 +379,7 @@ export default class TreatmentGoalsController {
           baselineTrials: goalData.baselineTrials,
           targetPercentage: goalData.targetPercentage,
           consecutiveSessions: goalData.consecutiveSessions,
-          goalPhase: goalData.goalPhase || 'acquisition',
+          goalPhase: goalData.goalPhase || 'baseline',
           createdBy: user.id,
         })
 

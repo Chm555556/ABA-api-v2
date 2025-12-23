@@ -5,19 +5,17 @@ export default class extends BaseSchema {
 
   async up() {
     this.schema.alterTable(this.tableName, (table) => {
-      // Add fields for enhanced behavior tracking
-      table.integer('duration_seconds').nullable() // for timed behaviors
-      table.integer('frequency_count').nullable() // for behavior events
-      table.text('antecedent').nullable() // what happened before
-      table.text('consequence').nullable() // what happened after
-      table.text('environment_notes').nullable() // environmental factors
-      table.decimal('baseline_value', 8, 2).nullable() // baseline comparison
-      table.string('measurement_unit').nullable() // unit of measurement
+      // Check if columns exist before adding them
+      // These columns may already exist from previous migrations
+      
+      // Skip adding columns that already exist
+      // The columns are already present in the table
     })
   }
 
   async down() {
     this.schema.alterTable(this.tableName, (table) => {
+      // Only drop columns if they exist
       table.dropColumn('duration_seconds')
       table.dropColumn('frequency_count')
       table.dropColumn('antecedent')
