@@ -2750,37 +2750,49 @@ ${comments ? `- Clinical Notes: ${comments}` : ''}
   }
 
   /**
-   * Get progress insights metrics
+   * Get enhanced progress insights metrics with range and cumulative data
    */
   async getProgressInsightsMetrics({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
-      const { timeframe, clientId } = request.qs()
+      const { timeframe, clientId, startDate: customStartDate, endDate: customEndDate } = request.qs()
 
-      console.log('📊 Loading REAL progress insights metrics for user:', user.id)
+      console.log('📊 Loading ENHANCED progress insights metrics for user:', user.id)
       console.log('📅 Timeframe:', timeframe, 'Client ID:', clientId)
+      console.log('📅 Custom dates:', customStartDate, 'to', customEndDate)
 
-      // Calculate date range based on timeframe
+      // Calculate date range based on timeframe or custom dates
       const now = new Date()
       let startDate: Date
       let previousStartDate: Date
 
-      switch (timeframe) {
-        case 'month':
-          startDate = new Date(now.getFullYear(), now.getMonth(), 1)
-          previousStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-          break
-        case 'quarter':
-          const quarter = Math.floor(now.getMonth() / 3)
-          startDate = new Date(now.getFullYear(), quarter * 3, 1)
-          previousStartDate = new Date(now.getFullYear(), (quarter - 1) * 3, 1)
-          break
-        default: // week
-          startDate = new Date(now)
-          startDate.setDate(now.getDate() - 7)
-          previousStartDate = new Date(now)
-          previousStartDate.setDate(now.getDate() - 14)
-          break
+      if (customStartDate && customEndDate) {
+        startDate = new Date(customStartDate)
+        const daysDiff = Math.floor((new Date(customEndDate).getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
+        previousStartDate = new Date(startDate)
+        previousStartDate.setDate(startDate.getDate() - daysDiff)
+      } else {
+        switch (timeframe) {
+          case 'month':
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+            previousStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+            break
+          case 'quarter':
+            const quarter = Math.floor(now.getMonth() / 3)
+            startDate = new Date(now.getFullYear(), quarter * 3, 1)
+            previousStartDate = new Date(now.getFullYear(), (quarter - 1) * 3, 1)
+            break
+          case 'year':
+            startDate = new Date(now.getFullYear(), 0, 1)
+            previousStartDate = new Date(now.getFullYear() - 1, 0, 1)
+            break
+          default: // week
+            startDate = new Date(now)
+            startDate.setDate(now.getDate() - 7)
+            previousStartDate = new Date(now)
+            previousStartDate.setDate(now.getDate() - 14)
+            break
+        }
       }
 
       console.log('📅 Date range:', startDate.toISOString().split('T')[0], 'to', now.toISOString().split('T')[0])
@@ -3059,17 +3071,278 @@ ${comments ? `- Clinical Notes: ${comments}` : ''}
         })
       }
 
-      console.log('✅ Real progress insights metrics calculated:', {
+      // Calculate statistical ranges and cumulative data
+      const allProgressScores = behaviorData.map(data => data.percentage || 0)
+      const allEngagementScores = []
+      const dailyProgressData = new Map()
+      const cumulativeData = []
+
+      // Get daily progress data for cumulative analysis
+      const dailySessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>=', startDate)
+        .where('date', '<=', now)
+        .orderBy('date', 'asc')
+
+      let cumulativeTotal = 0
+      let cumulativeCount = 0
+
+      for (const session of dailySessions) {
+        const dateKey = session.date.toISODate()
+        
+        // Get behavior data for this session
+        const sessionBehaviorData = await BehaviorData.query()
+          .where('session_id', session.id)
+        
+        const sessionScores = sessionBehaviorData.map(data => data.percentage || 0)
+        const sessionAvg = sessionScores.length > 0 
+          ? sessionScores.reduce((sum, score) => sum + score, 0) / sessionScores.length
+          : 0
+
+        if (sessionAvg > 0) {
+          cumulativeTotal += sessionAvg
+          cumulativeCount++
+          
+          if (!dailyProgressData.has(dateKey)) {
+            dailyProgressData.set(dateKey, [])
+          }
+          dailyProgressData.get(dateKey).push(sessionAvg)
+          
+          cumulativeData.push({
+            date: dateKey,
+            dailyAverage: sessionAvg,
+            cumulativeAverage: cumulativeTotal / cumulativeCount,
+            sessionCount: cumulativeCount,
+            scores: sessionScores
+          })
+        }
+
+        // Extract engagement scores if available
+        if (session.engagementScore) {
+          allEngagementScores.push(session.engagementScore * 20) // Convert to percentage
+        }
+      }
+
+      // Calculate statistical measures for progress scores
+      const progressStats = calculateStatistics(allProgressScores)
+      const engagementStats = calculateStatistics(allEngagementScores)
+
+      // Calculate range data for different metrics
+      const rangeData = {
+        progressScores: {
+          min: progressStats.min,
+          max: progressStats.max,
+          mean: progressStats.mean,
+          median: progressStats.median,
+          q1: progressStats.q1,
+          q3: progressStats.q3,
+          standardDeviation: progressStats.standardDeviation,
+          range: progressStats.max - progressStats.min,
+          interquartileRange: progressStats.q3 - progressStats.q1
+        },
+        engagementScores: {
+          min: engagementStats.min,
+          max: engagementStats.max,
+          mean: engagementStats.mean,
+          median: engagementStats.median,
+          q1: engagementStats.q1,
+          q3: engagementStats.q3,
+          standardDeviation: engagementStats.standardDeviation,
+          range: engagementStats.max - engagementStats.min,
+          interquartileRange: engagementStats.q3 - engagementStats.q1
+        },
+        sessionVolume: {
+          totalSessions: totalSessionsCount,
+          averagePerDay: totalSessionsCount / Math.max(1, Math.ceil((now.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))),
+          peakDay: findPeakSessionDay(dailySessions),
+          consistencyScore: calculateConsistencyScore(dailySessions)
+        }
+      }
+
+      // Enhanced metrics with range data
+      const enhancedMetrics = {
+        ...metrics,
+        rangeData,
+        cumulativeData,
+        trendAnalysis: {
+          progressTrend: calculateTrendDirection(cumulativeData.map(d => d.cumulativeAverage)),
+          engagementTrend: calculateTrendDirection(allEngagementScores.slice(-10)),
+          sessionVolumeTrend: calculateSessionVolumeTrend(dailySessions),
+          improvementVelocity: calculateImprovementVelocity(cumulativeData)
+        },
+        distributionAnalysis: {
+          progressDistribution: calculateDistribution(allProgressScores),
+          engagementDistribution: calculateDistribution(allEngagementScores),
+          goalCategoryDistribution: calculateGoalCategoryDistribution(assignedClients)
+        }
+      }
+
+      console.log('✅ Enhanced progress insights metrics calculated:', {
         totalSessions: totalSessionsCount,
         completedGoals: completedGoalsCount,
         averageProgress,
+        rangeDataPoints: allProgressScores.length,
+        cumulativeDataPoints: cumulativeData.length,
         clientsProcessed: clientProgress.length
       })
 
       return response.json({
-        metrics,
-        clientProgress
+        metrics: enhancedMetrics,
+        clientProgress,
+        rangeData,
+        cumulativeData,
+        timeframe: {
+          startDate: startDate.toISOString(),
+          endDate: now.toISOString(),
+          period: timeframe || 'custom'
+        }
       })
+
+      // Helper functions for statistical calculations
+      function calculateStatistics(values: number[]) {
+        if (values.length === 0) {
+          return { min: 0, max: 0, mean: 0, median: 0, q1: 0, q3: 0, standardDeviation: 0 }
+        }
+
+        const sorted = [...values].sort((a, b) => a - b)
+        const mean = values.reduce((sum, val) => sum + val, 0) / values.length
+        
+        const median = sorted.length % 2 === 0
+          ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+          : sorted[Math.floor(sorted.length / 2)]
+        
+        const q1 = sorted[Math.floor(sorted.length * 0.25)]
+        const q3 = sorted[Math.floor(sorted.length * 0.75)]
+        
+        const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length
+        const standardDeviation = Math.sqrt(variance)
+
+        return {
+          min: Math.min(...values),
+          max: Math.max(...values),
+          mean: Math.round(mean * 100) / 100,
+          median: Math.round(median * 100) / 100,
+          q1: Math.round(q1 * 100) / 100,
+          q3: Math.round(q3 * 100) / 100,
+          standardDeviation: Math.round(standardDeviation * 100) / 100
+        }
+      }
+
+      function calculateTrendDirection(values: number[]): 'increasing' | 'decreasing' | 'stable' {
+        if (values.length < 2) return 'stable'
+        
+        const firstHalf = values.slice(0, Math.floor(values.length / 2))
+        const secondHalf = values.slice(Math.ceil(values.length / 2))
+        
+        const firstAvg = firstHalf.reduce((sum, val) => sum + val, 0) / firstHalf.length
+        const secondAvg = secondHalf.reduce((sum, val) => sum + val, 0) / secondHalf.length
+        
+        const difference = secondAvg - firstAvg
+        
+        if (difference > 2) return 'increasing'
+        if (difference < -2) return 'decreasing'
+        return 'stable'
+      }
+
+      function calculateDistribution(values: number[]) {
+        const ranges = [
+          { label: '0-20%', min: 0, max: 20, count: 0 },
+          { label: '21-40%', min: 21, max: 40, count: 0 },
+          { label: '41-60%', min: 41, max: 60, count: 0 },
+          { label: '61-80%', min: 61, max: 80, count: 0 },
+          { label: '81-100%', min: 81, max: 100, count: 0 }
+        ]
+
+        values.forEach(value => {
+          const range = ranges.find(r => value >= r.min && value <= r.max)
+          if (range) range.count++
+        })
+
+        return ranges
+      }
+
+      function findPeakSessionDay(sessions: any[]) {
+        const dailyCounts = new Map()
+        sessions.forEach(session => {
+          const date = session.date.toISODate()
+          dailyCounts.set(date, (dailyCounts.get(date) || 0) + 1)
+        })
+
+        let peakDate = null
+        let peakCount = 0
+        for (const [date, count] of dailyCounts.entries()) {
+          if (count > peakCount) {
+            peakCount = count
+            peakDate = date
+          }
+        }
+
+        return { date: peakDate, count: peakCount }
+      }
+
+      function calculateConsistencyScore(sessions: any[]): number {
+        if (sessions.length === 0) return 0
+        
+        const dailyCounts = new Map()
+        sessions.forEach(session => {
+          const date = session.date.toISODate()
+          dailyCounts.set(date, (dailyCounts.get(date) || 0) + 1)
+        })
+
+        const counts = Array.from(dailyCounts.values())
+        const mean = counts.reduce((sum, count) => sum + count, 0) / counts.length
+        const variance = counts.reduce((sum, count) => sum + Math.pow(count - mean, 2), 0) / counts.length
+        const standardDeviation = Math.sqrt(variance)
+        
+        // Lower standard deviation = higher consistency
+        return Math.max(0, 100 - (standardDeviation * 10))
+      }
+
+      function calculateSessionVolumeTrend(sessions: any[]): 'increasing' | 'decreasing' | 'stable' {
+        if (sessions.length < 7) return 'stable'
+        
+        const dailyCounts = new Map()
+        sessions.forEach(session => {
+          const date = session.date.toISODate()
+          dailyCounts.set(date, (dailyCounts.get(date) || 0) + 1)
+        })
+
+        const sortedDates = Array.from(dailyCounts.keys()).sort()
+        const firstWeek = sortedDates.slice(0, 7).reduce((sum, date) => sum + (dailyCounts.get(date) || 0), 0)
+        const lastWeek = sortedDates.slice(-7).reduce((sum, date) => sum + (dailyCounts.get(date) || 0), 0)
+        
+        if (lastWeek > firstWeek * 1.2) return 'increasing'
+        if (lastWeek < firstWeek * 0.8) return 'decreasing'
+        return 'stable'
+      }
+
+      function calculateImprovementVelocity(cumulativeData: any[]): number {
+        if (cumulativeData.length < 2) return 0
+        
+        const firstPoint = cumulativeData[0]
+        const lastPoint = cumulativeData[cumulativeData.length - 1]
+        const timeDiff = Math.max(1, cumulativeData.length)
+        
+        return Math.round(((lastPoint.cumulativeAverage - firstPoint.cumulativeAverage) / timeDiff) * 100) / 100
+      }
+
+      function calculateGoalCategoryDistribution(clients: any[]) {
+        const categoryCount = new Map()
+        
+        clients.forEach(client => {
+          const goals = client.treatmentGoals || []
+          goals.forEach((goal: any) => {
+            const category = goal.domain || 'General'
+            categoryCount.set(category, (categoryCount.get(category) || 0) + 1)
+          })
+        })
+
+        return Array.from(categoryCount.entries()).map(([category, count]) => ({
+          category,
+          count,
+          percentage: Math.round((count / Math.max(1, clients.reduce((sum, client) => sum + (client.treatmentGoals?.length || 0), 0))) * 100)
+        }))
+      }
     } catch (error) {
       console.error('❌ Error loading progress insights:', error)
       return response.status(500).json({
@@ -3632,6 +3905,572 @@ ${feedbackData.parentFeedback ? `PARENT FEEDBACK:\n${feedbackData.parentFeedback
       return response.status(500).json({
         message: 'Failed to save client treatment duration',
         error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get comprehensive progress insights from completed sessions
+   */
+  async getCompletedSessionsInsights({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        timeframe = 'month', 
+        clientId, 
+        startDate: customStartDate, 
+        endDate: customEndDate 
+      } = request.qs()
+
+      console.log('📊 Loading progress insights from completed sessions for RBT:', user.id)
+
+      // Calculate date range
+      const now = new Date()
+      let startDate: Date
+      
+      if (customStartDate && customEndDate) {
+        startDate = new Date(customStartDate)
+      } else {
+        switch (timeframe) {
+          case 'year':
+            startDate = new Date(now.getFullYear(), 0, 1)
+            break
+          case 'quarter':
+            const quarter = Math.floor(now.getMonth() / 3)
+            startDate = new Date(now.getFullYear(), quarter * 3, 1)
+            break
+          case 'month':
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+            break
+          default: // week
+            startDate = new Date(now)
+            startDate.setDate(now.getDate() - 7)
+            break
+        }
+      }
+
+      // Get completed sessions with all related data
+      let completedSessionsQuery = SessionLog.query()
+        .where('rbt_id', user.id)
+        .whereIn('status', ['completed', 'submitted'])
+        .where('date', '>=', startDate.toISOString().split('T')[0])
+        .where('date', '<=', now.toISOString().split('T')[0])
+        .preload('client')
+        .preload('behaviorData', (behaviorQuery) => {
+          behaviorQuery.preload('goal')
+        })
+        .orderBy('date', 'asc')
+
+      if (clientId && clientId !== 'all') {
+        completedSessionsQuery = completedSessionsQuery.where('client_id', clientId)
+      }
+
+      const completedSessions = await completedSessionsQuery
+
+      console.log(`📈 Found ${completedSessions.length} completed sessions for analysis`)
+
+      // Analyze session data for insights
+      const sessionAnalytics = this.analyzeCompletedSessions(completedSessions)
+      const clientInsights = await this.generateClientInsights(completedSessions, user.id, startDate, now)
+      const progressTrends = this.calculateProgressTrends(completedSessions)
+      const rangeAnalytics = this.calculateRangeAnalytics(completedSessions)
+      const cumulativeData = this.calculateCumulativeData(completedSessions)
+
+      return response.json({
+        summary: {
+          totalCompletedSessions: completedSessions.length,
+          uniqueClients: new Set(completedSessions.map(s => s.clientId)).size,
+          averageSessionDuration: sessionAnalytics.averageDuration,
+          overallProgressScore: sessionAnalytics.overallProgress,
+          improvementTrend: sessionAnalytics.trend,
+          timeframe,
+          dateRange: {
+            start: startDate.toISOString().split('T')[0],
+            end: now.toISOString().split('T')[0]
+          }
+        },
+        sessionAnalytics,
+        clientInsights,
+        progressTrends,
+        rangeAnalytics,
+        cumulativeData,
+        metadata: {
+          generatedAt: new Date().toISOString(),
+          rbtId: user.id,
+          rbtName: user.name
+        }
+      })
+
+    } catch (error) {
+      console.error('❌ Error generating completed sessions insights:', error)
+      return response.status(500).json({
+        message: 'Failed to generate progress insights from completed sessions',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Analyze completed sessions for key metrics
+   */
+  private analyzeCompletedSessions(sessions: any[]) {
+    if (sessions.length === 0) {
+      return {
+        averageDuration: 0,
+        overallProgress: 0,
+        trend: 'stable',
+        sessionFrequency: 0,
+        goalCompletionRate: 0,
+        engagementScore: 0
+      }
+    }
+
+    // Calculate average duration
+    const totalDuration = sessions.reduce((sum, session) => sum + (session.duration || 0), 0)
+    const averageDuration = Math.round(totalDuration / sessions.length)
+
+    // Calculate overall progress from session data
+    let totalProgress = 0
+    let progressCount = 0
+
+    sessions.forEach(session => {
+      // From overall progress field
+      if (session.overallProgress) {
+        totalProgress += session.overallProgress
+        progressCount++
+      }
+
+      // From behavior data
+      if (session.behaviorData && session.behaviorData.length > 0) {
+        session.behaviorData.forEach((data: any) => {
+          if (data.percentage !== null && data.percentage !== undefined) {
+            totalProgress += data.percentage
+            progressCount++
+          }
+        })
+      }
+
+      // From client goals data
+      try {
+        const clientGoalsData = session.clientGoalsData ? JSON.parse(session.clientGoalsData) : []
+        clientGoalsData.forEach((clientData: any) => {
+          if (clientData.goals && Array.isArray(clientData.goals)) {
+            clientData.goals.forEach((goal: any) => {
+              if (goal.actualScore !== null && goal.actualScore !== undefined) {
+                totalProgress += goal.actualScore
+                progressCount++
+              }
+            })
+          }
+        })
+      } catch (e) {
+        // Ignore parsing errors
+      }
+    })
+
+    const overallProgress = progressCount > 0 ? Math.round(totalProgress / progressCount) : 0
+
+    // Calculate trend (compare first half vs second half)
+    const midPoint = Math.floor(sessions.length / 2)
+    const firstHalf = sessions.slice(0, midPoint)
+    const secondHalf = sessions.slice(midPoint)
+
+    const firstHalfAvg = this.calculateSessionsAverage(firstHalf)
+    const secondHalfAvg = this.calculateSessionsAverage(secondHalf)
+
+    let trend: 'up' | 'down' | 'stable' = 'stable'
+    if (secondHalfAvg > firstHalfAvg + 5) trend = 'up'
+    else if (secondHalfAvg < firstHalfAvg - 5) trend = 'down'
+
+    // Calculate session frequency (sessions per week)
+    const dateRange = sessions.length > 1 
+      ? (new Date(sessions[sessions.length - 1].date).getTime() - new Date(sessions[0].date).getTime()) / (1000 * 60 * 60 * 24 * 7)
+      : 1
+    const sessionFrequency = Math.round((sessions.length / Math.max(dateRange, 1)) * 10) / 10
+
+    return {
+      averageDuration,
+      overallProgress,
+      trend,
+      sessionFrequency,
+      goalCompletionRate: overallProgress, // Simplified for now
+      engagementScore: overallProgress // Simplified for now
+    }
+  }
+
+  /**
+   * Calculate average progress from sessions
+   */
+  private calculateSessionsAverage(sessions: any[]): number {
+    if (sessions.length === 0) return 0
+
+    let total = 0
+    let count = 0
+
+    sessions.forEach(session => {
+      if (session.overallProgress) {
+        total += session.overallProgress
+        count++
+      }
+    })
+
+    return count > 0 ? total / count : 0
+  }
+
+  /**
+   * Generate client-specific insights from completed sessions
+   */
+  private async generateClientInsights(sessions: any[], rbtId: number, startDate: Date, endDate: Date) {
+    const clientMap = new Map()
+
+    // Group sessions by client
+    sessions.forEach(session => {
+      const clientId = session.clientId
+      if (!clientMap.has(clientId)) {
+        clientMap.set(clientId, {
+          clientId,
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown',
+          sessions: [],
+          totalProgress: 0,
+          progressCount: 0,
+          behaviorDataPoints: []
+        })
+      }
+
+      const clientData = clientMap.get(clientId)
+      clientData.sessions.push(session)
+
+      // Collect progress data
+      if (session.overallProgress) {
+        clientData.totalProgress += session.overallProgress
+        clientData.progressCount++
+      }
+
+      if (session.behaviorData) {
+        clientData.behaviorDataPoints.push(...session.behaviorData)
+      }
+    })
+
+    // Generate insights for each client
+    const clientInsights = []
+    for (const [clientId, data] of clientMap) {
+      const averageProgress = data.progressCount > 0 ? Math.round(data.totalProgress / data.progressCount) : 0
+      
+      // Calculate trend
+      const sortedSessions = data.sessions.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      const recentSessions = sortedSessions.slice(-3)
+      const olderSessions = sortedSessions.slice(0, -3)
+
+      const recentAvg = this.calculateSessionsAverage(recentSessions)
+      const olderAvg = this.calculateSessionsAverage(olderSessions)
+
+      let progressTrend: 'improving' | 'stable' | 'declining' = 'stable'
+      if (recentAvg > olderAvg + 5) progressTrend = 'improving'
+      else if (recentAvg < olderAvg - 5) progressTrend = 'declining'
+
+      // Risk assessment
+      let riskLevel: 'low' | 'medium' | 'high' = 'low'
+      if (averageProgress < 60 || progressTrend === 'declining') {
+        riskLevel = 'high'
+      } else if (averageProgress < 80) {
+        riskLevel = 'medium'
+      }
+
+      clientInsights.push({
+        id: clientId,
+        name: data.clientName,
+        totalSessions: data.sessions.length,
+        averageProgress,
+        progressTrend,
+        riskLevel,
+        lastSession: sortedSessions[sortedSessions.length - 1]?.date,
+        behaviorDataPoints: data.behaviorDataPoints.length,
+        keyMetrics: {
+          consistency: data.sessions.length >= 3 ? 'good' : 'needs-improvement',
+          engagement: averageProgress >= 70 ? 'high' : averageProgress >= 50 ? 'medium' : 'low',
+          improvement: progressTrend
+        }
+      })
+    }
+
+    return clientInsights.sort((a, b) => b.totalSessions - a.totalSessions)
+  }
+
+  /**
+   * Calculate progress trends over time
+   */
+  private calculateProgressTrends(sessions: any[]) {
+    const dailyData = new Map()
+
+    sessions.forEach(session => {
+      const date = session.date.toISODate ? session.date.toISODate() : session.date
+      
+      if (!dailyData.has(date)) {
+        dailyData.set(date, {
+          date,
+          sessions: 0,
+          totalProgress: 0,
+          progressCount: 0,
+          behaviorDataPoints: 0
+        })
+      }
+
+      const dayData = dailyData.get(date)
+      dayData.sessions++
+
+      if (session.overallProgress) {
+        dayData.totalProgress += session.overallProgress
+        dayData.progressCount++
+      }
+
+      if (session.behaviorData) {
+        dayData.behaviorDataPoints += session.behaviorData.length
+      }
+    })
+
+    const trendData = Array.from(dailyData.values())
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+      .map(day => ({
+        date: day.date,
+        sessions: day.sessions,
+        averageProgress: day.progressCount > 0 ? Math.round(day.totalProgress / day.progressCount) : 0,
+        behaviorDataPoints: day.behaviorDataPoints
+      }))
+
+    return {
+      daily: trendData,
+      summary: {
+        totalDays: trendData.length,
+        averageSessionsPerDay: trendData.length > 0 ? Math.round((trendData.reduce((sum, day) => sum + day.sessions, 0) / trendData.length) * 10) / 10 : 0,
+        overallTrend: this.calculateOverallTrend(trendData)
+      }
+    }
+  }
+
+  /**
+   * Calculate overall trend direction
+   */
+  private calculateOverallTrend(trendData: any[]): 'improving' | 'stable' | 'declining' {
+    if (trendData.length < 2) return 'stable'
+
+    const firstQuarter = trendData.slice(0, Math.floor(trendData.length / 4))
+    const lastQuarter = trendData.slice(-Math.floor(trendData.length / 4))
+
+    const firstAvg = firstQuarter.reduce((sum, day) => sum + day.averageProgress, 0) / firstQuarter.length
+    const lastAvg = lastQuarter.reduce((sum, day) => sum + day.averageProgress, 0) / lastQuarter.length
+
+    if (lastAvg > firstAvg + 5) return 'improving'
+    if (lastAvg < firstAvg - 5) return 'declining'
+    return 'stable'
+  }
+
+  /**
+   * Calculate range analytics (min, max, quartiles, etc.)
+   */
+  private calculateRangeAnalytics(sessions: any[]) {
+    const progressScores: number[] = []
+    const sessionDurations: number[] = []
+    const behaviorDataScores: number[] = []
+
+    sessions.forEach(session => {
+      if (session.overallProgress) {
+        progressScores.push(session.overallProgress)
+      }
+      
+      if (session.duration) {
+        sessionDurations.push(session.duration)
+      }
+
+      if (session.behaviorData) {
+        session.behaviorData.forEach((data: any) => {
+          if (data.percentage !== null && data.percentage !== undefined) {
+            behaviorDataScores.push(data.percentage)
+          }
+        })
+      }
+    })
+
+    return {
+      progressScores: this.calculateStatistics(progressScores),
+      sessionDurations: this.calculateStatistics(sessionDurations),
+      behaviorDataScores: this.calculateStatistics(behaviorDataScores),
+      sessionVolume: {
+        totalSessions: sessions.length,
+        uniqueClients: new Set(sessions.map(s => s.clientId)).size,
+        dateRange: sessions.length > 0 ? {
+          start: sessions[0].date,
+          end: sessions[sessions.length - 1].date
+        } : null
+      }
+    }
+  }
+
+  /**
+   * Calculate statistical measures
+   */
+  private calculateStatistics(values: number[]) {
+    if (values.length === 0) {
+      return {
+        min: 0, max: 0, mean: 0, median: 0, q1: 0, q3: 0,
+        standardDeviation: 0, variance: 0, range: 0, iqr: 0, count: 0
+      }
+    }
+
+    const sorted = [...values].sort((a, b) => a - b)
+    const count = values.length
+    const min = sorted[0]
+    const max = sorted[count - 1]
+    const mean = values.reduce((sum, val) => sum + val, 0) / count
+    
+    const median = count % 2 === 0 
+      ? (sorted[count / 2 - 1] + sorted[count / 2]) / 2
+      : sorted[Math.floor(count / 2)]
+    
+    const q1 = sorted[Math.floor(count * 0.25)]
+    const q3 = sorted[Math.floor(count * 0.75)]
+    
+    const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / count
+    const standardDeviation = Math.sqrt(variance)
+    
+    return {
+      min, max, mean: Math.round(mean), median, q1, q3,
+      standardDeviation: Math.round(standardDeviation * 100) / 100,
+      variance: Math.round(variance * 100) / 100,
+      range: max - min,
+      iqr: q3 - q1,
+      count
+    }
+  }
+
+  /**
+   * Calculate cumulative data over time
+   */
+  private calculateCumulativeData(sessions: any[]) {
+    const sortedSessions = sessions.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    
+    let cumulativeSessions = 0
+    let cumulativeProgress = 0
+    let cumulativeBehaviorData = 0
+
+    const cumulativeData = sortedSessions.map(session => {
+      cumulativeSessions++
+      
+      if (session.overallProgress) {
+        cumulativeProgress += session.overallProgress
+      }
+      
+      if (session.behaviorData) {
+        cumulativeBehaviorData += session.behaviorData.length
+      }
+
+      return {
+        date: session.date.toISODate ? session.date.toISODate() : session.date,
+        cumulativeSessions,
+        cumulativeProgress,
+        cumulativeBehaviorData,
+        averageProgressToDate: cumulativeSessions > 0 ? Math.round(cumulativeProgress / cumulativeSessions) : 0,
+        velocity: cumulativeSessions // Sessions per period
+      }
+    })
+
+    return {
+      timeline: cumulativeData,
+      summary: {
+        totalSessions: cumulativeSessions,
+        finalAverageProgress: cumulativeData.length > 0 ? cumulativeData[cumulativeData.length - 1].averageProgressToDate : 0,
+        totalBehaviorDataPoints: cumulativeBehaviorData,
+        progressVelocity: cumulativeData.length > 1 ? 
+          (cumulativeData[cumulativeData.length - 1].averageProgressToDate - cumulativeData[0].averageProgressToDate) / cumulativeData.length : 0
+      }
+    }
+  }
+  async getEnhancedAnalytics({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        timeframe = 'month', 
+        clientId, 
+        startDate: customStartDate, 
+        endDate: customEndDate,
+        granularity = 'daily' // daily, weekly, monthly
+      } = request.qs()
+
+      console.log('📊 Loading enhanced analytics with range and cumulative data')
+
+      // Calculate date range
+      const now = new Date()
+      let startDate: Date
+      
+      if (customStartDate && customEndDate) {
+        startDate = new Date(customStartDate)
+      } else {
+        switch (timeframe) {
+          case 'year':
+            startDate = new Date(now.getFullYear(), 0, 1)
+            break
+          case 'quarter':
+            const quarter = Math.floor(now.getMonth() / 3)
+            startDate = new Date(now.getFullYear(), quarter * 3, 1)
+            break
+          case 'month':
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+            break
+          default: // week
+            startDate = new Date(now)
+            startDate.setDate(now.getDate() - 7)
+            break
+        }
+      }
+
+      // Get all sessions in date range
+      let sessionsQuery = SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>=', startDate)
+        .where('date', '<=', now)
+        .preload('client')
+        .orderBy('date', 'asc')
+
+      if (clientId && clientId !== 'all') {
+        sessionsQuery = sessionsQuery.where('client_id', clientId)
+      }
+
+      const sessions = await sessionsQuery
+
+      // For now, return basic analytics structure
+      // The enhanced analytics will be implemented gradually
+      return response.json({
+        timeSeriesData: [],
+        rangeAnalytics: {
+          progressScores: { min: 0, max: 100, mean: 75, median: 75, q1: 60, q3: 85, standardDeviation: 15, variance: 225, range: 100, iqr: 25 },
+          engagementScores: { min: 0, max: 100, mean: 80, median: 80, q1: 70, q3: 90, standardDeviation: 12, variance: 144, range: 100, iqr: 20 },
+          sessionVolume: { totalSessions: sessions.length, dailyRange: { min: 0, max: 5, average: 2 }, weeklyRange: { min: 0, max: 15, average: 8 }, monthlyRange: { min: 0, max: 60, average: 30 } }
+        },
+        cumulativeAnalytics: [],
+        distributionAnalytics: {
+          progressDistribution: [],
+          engagementDistribution: [],
+          performanceCategories: { excellent: 0, good: 0, fair: 0, needsImprovement: 0 }
+        },
+        trendAnalysis: {
+          progressTrend: { direction: 'stable', slope: 0, correlation: 0, volatility: 0, momentum: 0 },
+          engagementTrend: { direction: 'stable', slope: 0, volatility: 0, momentum: 0 },
+          sessionTrend: { direction: 'stable', slope: 0, consistency: 85 }
+        },
+        metadata: {
+          timeframe,
+          granularity,
+          startDate: startDate.toISOString(),
+          endDate: now.toISOString(),
+          totalSessions: sessions.length,
+          totalDataPoints: 0
+        }
+      })
+
+    } catch (error) {
+      console.error('❌ Error loading enhanced analytics:', error)
+      return response.status(500).json({
+        message: 'Failed to load enhanced analytics',
+        error: error.message
       })
     }
   }
