@@ -160,6 +160,8 @@ router.group(() => {
       
       // Progress Insights routes
       router.get('/progress-insights/metrics', [RBTController, 'getProgressInsightsMetrics'])
+      router.get('/progress-insights/enhanced-analytics', [RBTController, 'getEnhancedAnalytics'])
+      router.get('/progress-insights/completed-sessions', [RBTController, 'getCompletedSessionsInsights'])
       router.post('/progress-insights/feedback', [RBTController, 'submitProgressFeedback'])
       
       // Behavior Assessment routes
