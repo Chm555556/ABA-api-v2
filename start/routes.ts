@@ -164,6 +164,9 @@ router.group(() => {
       router.get('/progress-insights/completed-sessions', [RBTController, 'getCompletedSessionsInsights'])
       router.post('/progress-insights/feedback', [RBTController, 'submitProgressFeedback'])
       
+      // Development/Testing routes
+      router.post('/create-sample-sessions', [RBTController, 'createSampleSessions'])
+      
       // Behavior Assessment routes
       router.post('/behavior-assessments', [RBTController, 'saveBehaviorAssessment'])
       router.get('/behavior-assessments/:id', [RBTController, 'getBehaviorAssessments'])

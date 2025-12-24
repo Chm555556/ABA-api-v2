@@ -4475,4 +4475,114 @@ ${feedbackData.parentFeedback ? `PARENT FEEDBACK:\n${feedbackData.parentFeedback
     }
   }
 
+  /**
+   * Create sample sessions for testing Progress Insights Dashboard
+   * This is a development/testing method
+   */
+  async createSampleSessions({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      
+      console.log('🚀 Creating sample completed sessions for testing Progress Insights...')
+      
+      // Get the first available client for this RBT
+      const client = await Client.query()
+        .whereHas('assignedRbts', (rbtQuery) => {
+          rbtQuery.where('users.id', user.id)
+        })
+        .first()
+      
+      if (!client) {
+        return response.status(404).json({
+          message: 'No assigned clients found. Please assign a client first.',
+          error: 'NO_CLIENTS_FOUND'
+        })
+      }
+      
+      const sampleSessions = []
+      const now = new Date()
+      
+      // Create 30 days of sample sessions
+      for (let i = 0; i < 30; i++) {
+        const sessionDate = DateTime.now().minus({ days: 29 - i })
+        
+        // Create 1-2 sessions per day (not every day)
+        if (Math.random() > 0.3) { // 70% chance of having sessions on any given day
+          const sessionsPerDay = Math.floor(Math.random() * 2) + 1
+          
+          for (let j = 0; j < sessionsPerDay; j++) {
+            // Generate realistic progress scores with some trend
+            const baseProgress = 65 + (i * 0.5) // Slight upward trend over time
+            const variation = Math.random() * 20 - 10 // ±10% variation
+            const progress = Math.max(Math.min(baseProgress + variation, 95), 45)
+            
+            const session = await SessionLog.create({
+              clientId: client.id,
+              rbtId: user.id,
+              bcbaId: client.assignedBcba,
+              date: sessionDate,
+              startTime: '09:00',
+              endTime: '10:00',
+              duration: 60,
+              totalHours: 1.0,
+              cptCode: '97153',
+              serviceType: 'Direct Service',
+              location: 'clinic',
+              sessionNotes: `Sample session ${i}-${j} with ${Math.round(progress)}% progress. Client engaged well and showed improvement.`,
+              rbtSignature: user.name,
+              status: 'completed',
+              overallProgress: Math.round(progress),
+              overallFeedback: `Client showed ${progress >= 80 ? 'excellent' : progress >= 70 ? 'good' : 'fair'} engagement and made progress on goals. Overall score: ${Math.round(progress)}%`,
+              clientGoalsData: [
+                {
+                  clientId: client.id,
+                  clientName: client.fullName,
+                  goals: [
+                    {
+                      goalId: 1,
+                      goalTitle: 'Sample Goal - Communication',
+                      targetScore: 80,
+                      actualScore: Math.round(progress),
+                      feedback: `${progress >= 80 ? 'Excellent' : progress >= 70 ? 'Good' : 'Needs improvement'} progress on communication goals.`
+                    }
+                  ]
+                }
+              ]
+            })
+            
+            sampleSessions.push(session)
+          }
+        }
+      }
+      
+      console.log(`✅ Created ${sampleSessions.length} sample sessions for client ${client.fullName}`)
+      
+      return response.json({
+        message: `Successfully created ${sampleSessions.length} sample sessions for testing`,
+        data: {
+          clientId: client.id,
+          clientName: client.fullName,
+          sessionsCreated: sampleSessions.length,
+          dateRange: {
+            start: DateTime.now().minus({ days: 29 }).toISODate(),
+            end: DateTime.now().toISODate()
+          },
+          sampleSession: sampleSessions[0] ? {
+            id: sampleSessions[0].id,
+            date: sampleSessions[0].date.toISODate(),
+            progress: sampleSessions[0].overallProgress,
+            status: sampleSessions[0].status
+          } : null
+        }
+      })
+      
+    } catch (error) {
+      console.error('❌ Error creating sample sessions:', error)
+      return response.status(500).json({
+        message: 'Failed to create sample sessions',
+        error: error.message
+      })
+    }
+  }
+
 }
