@@ -4,12 +4,12 @@ import SessionLog from '#models/session_log'
 import SessionParticipant from '#models/session_participant'
 import Client from '#models/client'
 
-export default class CreateTestGroupSession extends BaseCommand {
-  static commandName = 'create:test-group-session'
-  static description = 'Create test group and community sessions with participants'
+export default class CreateDemoSessions extends BaseCommand {
+  static commandName = 'create:demo-sessions'
+  static description = 'Create demo group and community sessions for testing and training'
 
   async run() {
-    this.logger.info('🔧 Creating test group session...')
+    this.logger.info('🔧 Creating demo group sessions for training and testing...')
 
     // Configuration
     const RBT_ID = 11 // iamrbt
@@ -100,10 +100,14 @@ export default class CreateTestGroupSession extends BaseCommand {
       this.logger.info(`   ✅ Added participant: ${client.fullName} (Participant ID: ${participant.id})`)
     }
 
-    this.logger.info('\n🎉 Test sessions created successfully!')
+    this.logger.info('\n🎉 Demo sessions created successfully!')
     this.logger.info(`\n📋 Summary:`)
     this.logger.info(`   Group Session ID: ${groupSession.id} (${clients.length} participants)`)
     this.logger.info(`   Community Session ID: ${communitySession.id} (2 participants)`)
-    this.logger.info(`\n💡 Test these sessions in the RBT Dashboard → My Sessions → View Details`)
+    this.logger.info(`\n💡 View these sessions in the RBT Dashboard → My Sessions → View Details`)
+    this.logger.info(`\n🎯 Use these sessions for:`)
+    this.logger.info(`   - Training new RBTs on group session workflows`)
+    this.logger.info(`   - Testing group session functionality`)
+    this.logger.info(`   - Demonstrating multi-participant sessions to stakeholders`)
   }
 }

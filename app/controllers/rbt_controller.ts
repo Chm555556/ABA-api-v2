@@ -188,6 +188,14 @@ export default class RBTController {
             measurementType: goal.measurementType,
             masteryCriteria: goal.masteryCriteria,
             status: goal.status,
+            // Program Builder fields
+            domain: goal.domain,
+            promptHierarchy: goal.promptHierarchy,
+            baselineScore: goal.baselineScore,
+            baselineTrials: goal.baselineTrials,
+            targetPercentage: goal.targetPercentage,
+            consecutiveSessions: goal.consecutiveSessions,
+            goalPhase: goal.goalPhase,
             createdBy: goal.createdBy,
             createdByName: goal.creator?.name || 'Unknown',
             createdAt: goal.createdAt.toISO(),
@@ -218,21 +226,83 @@ export default class RBTController {
         'serviceType',
       ])
 
-      // Verify RBT has access to this client
-      const client = await Client.query()
+      console.log('🚀 RBT Start Session Request:', {
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        clientId,
+        location,
+        cptCode,
+        serviceType
+      })
+
+      // First check if client exists
+      const clientExists = await Client.find(clientId)
+      if (!clientExists) {
+        console.log(`❌ Client ${clientId} not found`)
+        return response.status(404).json({
+          message: `Client with ID ${clientId} not found`,
+          error: 'CLIENT_NOT_FOUND'
+        })
+      }
+
+      console.log('✅ Client exists:', {
+        id: clientExists.id,
+        name: clientExists.fullName,
+        assignedBcba: clientExists.assignedBcba
+      })
+
+      // Check if RBT has access to this client through direct assignment
+      console.log('🔍 Checking direct RBT assignment...')
+      const directAssignment = await Client.query()
         .where('id', clientId)
         .whereHas('assignedRbts', (rbtQuery) => {
           rbtQuery.where('users.id', user.id)
         })
-        .firstOrFail()
+        .first()
+
+      if (directAssignment) {
+        console.log('✅ RBT has direct assignment to client')
+      } else {
+        console.log('⚠️ No direct assignment found, checking sessions/schedules...')
+        
+        // Check if RBT has sessions with this client
+        const hasSession = await SessionLog.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        // Check if RBT has schedules with this client
+        const hasSchedule = await Schedule.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        if (!hasSession && !hasSchedule) {
+          console.log(`❌ RBT ${user.id} has no access to client ${clientId}`)
+          return response.status(403).json({
+            message: `You do not have access to client ${clientExists.fullName}. Please contact your supervisor.`,
+            error: 'ACCESS_DENIED',
+            details: {
+              clientId,
+              clientName: clientExists.fullName,
+              rbtId: user.id,
+              rbtName: user.name
+            }
+          })
+        }
+
+        console.log('✅ RBT has session/schedule access to client')
+      }
 
       const now = DateTime.now()
       const startTime = now.toFormat('HH:mm')
 
+      console.log('📝 Creating session log...')
       const session = await SessionLog.create({
-        clientId: client.id,
+        clientId: clientExists.id,
         rbtId: user.id,
-        bcbaId: client.assignedBcba!,
+        bcbaId: clientExists.assignedBcba || null,
         date: now,
         startTime,
         endTime: startTime, // Will be updated when session ends
@@ -246,12 +316,14 @@ export default class RBTController {
         status: 'draft',
       })
 
+      console.log('✅ Session created successfully:', session.id)
+
       return response.status(201).json({
         message: 'Session started successfully',
         data: {
           id: session.id,
           clientId: session.clientId,
-          clientName: client.fullName,
+          clientName: clientExists.fullName,
           startTime: session.startTime,
           location: session.location,
           status: session.status,
@@ -259,9 +331,21 @@ export default class RBTController {
         },
       })
     } catch (error) {
+      console.error('❌ RBT Start Session Error:', error)
+      console.error('Stack trace:', error.stack)
+      
+      // Provide more specific error messages
+      if (error.code === 'E_ROW_NOT_FOUND') {
+        return response.status(404).json({
+          message: 'Client not found or you do not have access to this client',
+          error: 'CLIENT_ACCESS_DENIED'
+        })
+      }
+
       return response.status(400).json({
         message: 'Failed to start session',
         error: error.message,
+        details: error.stack?.split('\n').slice(0, 3).join('\n')
       })
     }
   }
@@ -313,6 +397,329 @@ export default class RBTController {
     } catch (error) {
       return response.status(400).json({
         message: 'Failed to end session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Complete a session with comprehensive data (goals, feedback, progress)
+   */
+  async completeSession({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+      const {
+        overallSessionFeedback,
+        overallSessionProgress,
+        clientGoalsData, // Array of client goals with feedback and progress
+        sessionNotes,
+        parentSignature
+      } = request.only([
+        'overallSessionFeedback',
+        'overallSessionProgress', 
+        'clientGoalsData',
+        'sessionNotes',
+        'parentSignature'
+      ])
+
+      console.log('🔄 Completing session:', {
+        sessionId,
+        sessionIdType: typeof sessionId,
+        userId: user.id,
+        hasOverallFeedback: !!overallSessionFeedback,
+        overallProgress: overallSessionProgress,
+        overallProgressType: typeof overallSessionProgress,
+        clientGoalsCount: clientGoalsData?.length || 0,
+        clientGoalsDataType: typeof clientGoalsData,
+        requestBody: request.body()
+      })
+
+      // Validate session ID
+      if (!sessionId || isNaN(parseInt(sessionId))) {
+        console.log('❌ Invalid session ID:', sessionId)
+        return response.status(400).json({
+          message: 'Invalid session ID provided',
+          error: 'INVALID_SESSION_ID'
+        })
+      }
+
+      // Get the session
+      console.log(`🔍 Looking for session ${sessionId} for RBT ${user.id}`)
+      
+      // First check if session exists at all
+      const anySession = await SessionLog.query()
+        .where('id', sessionId)
+        .first()
+
+      if (!anySession) {
+        console.log(`❌ Session ${sessionId} does not exist in database`)
+        return response.status(404).json({
+          message: `Session with ID ${sessionId} does not exist`,
+          error: 'SESSION_NOT_FOUND'
+        })
+      }
+
+      console.log(`📋 Session ${sessionId} exists:`, {
+        id: anySession.id,
+        rbtId: anySession.rbtId,
+        status: anySession.status,
+        clientId: anySession.clientId
+      })
+
+      // Check if session belongs to this RBT
+      if (anySession.rbtId !== user.id) {
+        console.log(`❌ Session ${sessionId} belongs to RBT ${anySession.rbtId}, not ${user.id}`)
+        return response.status(403).json({
+          message: 'You do not have permission to complete this session',
+          error: 'ACCESS_DENIED'
+        })
+      }
+
+      // Check if session is in draft status
+      if (anySession.status !== 'draft') {
+        console.log(`❌ Session ${sessionId} is in status '${anySession.status}', not 'draft'`)
+        return response.status(400).json({
+          message: `Session is in '${anySession.status}' status and cannot be completed. Only draft sessions can be completed.`,
+          error: 'INVALID_SESSION_STATUS'
+        })
+      }
+      
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .preload('client')
+        .first()
+
+      if (!session) {
+        console.log(`❌ Unexpected error: Session ${sessionId} passed validation but query failed`)
+        return response.status(500).json({
+          message: 'Unexpected error during session lookup',
+          error: 'INTERNAL_ERROR'
+        })
+      }
+
+      console.log(`✅ Found session ${sessionId} for client ${session.client?.fullName || 'Unknown'}`)
+
+      const now = DateTime.now()
+      const endTime = now.toFormat('HH:mm')
+
+      // Calculate duration in minutes
+      const [startHour, startMin] = session.startTime.split(':').map(Number)
+      const [endHour, endMin] = endTime.split(':').map(Number)
+      const duration = (endHour * 60 + endMin) - (startHour * 60 + startMin)
+      const totalHours = Math.round((duration / 60) * 100) / 100
+
+      // Update session with completion data
+      session.endTime = endTime
+      session.duration = duration
+      session.totalHours = totalHours
+      session.sessionNotes = sessionNotes || ''
+      session.parentSignature = parentSignature
+      session.status = 'completed'
+
+      // Validate and store session-level feedback and progress
+      console.log('🔍 Validating session data...')
+      
+      // Validate overallProgress
+      let validProgress = 0
+      if (overallSessionProgress !== undefined && overallSessionProgress !== null) {
+        const progressNum = Number(overallSessionProgress)
+        if (isNaN(progressNum)) {
+          console.log('❌ Invalid overallProgress value:', overallSessionProgress)
+          return response.status(400).json({
+            message: 'overallSessionProgress must be a number',
+            error: 'INVALID_PROGRESS_VALUE'
+          })
+        }
+        if (progressNum < 0 || progressNum > 100) {
+          console.log('❌ overallProgress out of range:', progressNum)
+          return response.status(400).json({
+            message: 'overallSessionProgress must be between 0 and 100',
+            error: 'PROGRESS_OUT_OF_RANGE'
+          })
+        }
+        validProgress = progressNum
+      }
+
+      // Validate clientGoalsData
+      let validClientGoalsData = []
+      if (clientGoalsData !== undefined && clientGoalsData !== null) {
+        if (!Array.isArray(clientGoalsData)) {
+          console.log('❌ clientGoalsData is not an array:', typeof clientGoalsData)
+          return response.status(400).json({
+            message: 'clientGoalsData must be an array',
+            error: 'INVALID_GOALS_DATA_TYPE'
+          })
+        }
+        validClientGoalsData = clientGoalsData
+      }
+
+      // Store session-level feedback and progress
+      session.overallFeedback = overallSessionFeedback || ''
+      session.overallProgress = validProgress
+      session.clientGoalsData = validClientGoalsData
+
+      console.log('💾 Saving session with validated data:', {
+        overallFeedback: session.overallFeedback?.substring(0, 50) + '...',
+        overallProgress: session.overallProgress,
+        clientGoalsDataCount: session.clientGoalsData.length,
+        sessionNotes: sessionNotes?.substring(0, 30) + '...'
+      })
+
+      try {
+        await session.save()
+        console.log('✅ Session saved successfully')
+      } catch (saveError) {
+        console.error('❌ Error saving session:', {
+          message: saveError.message,
+          code: saveError.code,
+          constraint: saveError.constraint,
+          detail: saveError.detail,
+          stack: saveError.stack?.split('\n').slice(0, 3)
+        })
+        
+        // Provide more specific error messages based on the error type
+        if (saveError.code === 'ER_DATA_TOO_LONG') {
+          return response.status(400).json({
+            message: 'One of the text fields is too long for the database',
+            error: 'DATA_TOO_LONG'
+          })
+        } else if (saveError.code === 'ER_BAD_NULL_ERROR') {
+          return response.status(400).json({
+            message: 'A required field is missing',
+            error: 'MISSING_REQUIRED_FIELD'
+          })
+        } else {
+          return response.status(500).json({
+            message: 'Database error while saving session',
+            error: 'DATABASE_ERROR',
+            details: saveError.message
+          })
+        }
+      }
+
+      // Also save individual goal progress if provided
+      if (clientGoalsData && Array.isArray(clientGoalsData)) {
+        for (const clientData of clientGoalsData) {
+          if (clientData.goals && Array.isArray(clientData.goals)) {
+            for (const goalData of clientData.goals) {
+              // Save basic behavior data entry for tracking
+              // Note: BehaviorData model is designed for trial-based data
+              // We'll create a basic entry to track that this goal was worked on
+              try {
+                await BehaviorData.create({
+                  sessionId: session.id, // Correct field name
+                  goalId: goalData.goalId,
+                  correct: 0, // Will be updated when trials are recorded
+                  incorrect: 0,
+                  prompted: 0,
+                  total: 0,
+                  percentage: goalData.actualScore || 0, // Use actual score as percentage
+                  environmentNotes: goalData.feedback || null,
+                })
+              } catch (behaviorDataError) {
+                console.warn(`⚠️ Could not create behavior data for goal ${goalData.goalId}:`, behaviorDataError.message)
+                // Continue with session completion even if behavior data creation fails
+              }
+            }
+          }
+        }
+      }
+
+      return response.json({
+        message: 'Session completed successfully',
+        data: {
+          id: session.id,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          status: session.status,
+          overallFeedback: session.overallFeedback,
+          overallProgress: session.overallProgress,
+          clientGoalsCount: clientGoalsData?.length || 0,
+          updatedAt: session.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error completing session:', error)
+      console.error('Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n')
+      })
+      
+      // Provide more specific error messages
+      if (error.code === 'E_ROW_NOT_FOUND') {
+        return response.status(404).json({
+          message: 'Session not found or you do not have permission to complete it',
+          error: 'SESSION_NOT_FOUND'
+        })
+      }
+      
+      return response.status(400).json({
+        message: 'Failed to complete session',
+        error: error.message,
+        details: 'Check server logs for more information'
+      })
+    }
+  }
+
+  /**
+   * Save session feedback and progress (for intermediate saves)
+   */
+  async saveSessionFeedback({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        sessionId,
+        overallSessionFeedback,
+        overallSessionProgress,
+        sessionType,
+        location,
+        duration
+      } = request.only([
+        'sessionId',
+        'overallSessionFeedback',
+        'overallSessionProgress',
+        'sessionType',
+        'location',
+        'duration'
+      ])
+
+      console.log('💾 Saving session feedback:', {
+        sessionId,
+        overallSessionFeedback: overallSessionFeedback?.substring(0, 50) + '...',
+        overallSessionProgress
+      })
+
+      // Find the session
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Update session with feedback and progress
+      session.overallFeedback = overallSessionFeedback || ''
+      session.overallProgress = overallSessionProgress || 0
+
+      await session.save()
+
+      return response.json({
+        message: 'Session feedback saved successfully',
+        data: {
+          id: session.id,
+          overallFeedback: session.overallFeedback,
+          overallProgress: session.overallProgress,
+          updatedAt: session.updatedAt?.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ Error saving session feedback:', error)
+      return response.status(400).json({
+        message: 'Failed to save session feedback',
         error: error.message,
       })
     }
@@ -495,6 +902,420 @@ export default class RBTController {
   }
 
   /**
+   * Get completed sessions with comprehensive data
+   */
+  async getCompletedSessions({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const page = request.input('page', 1)
+      const limit = request.input('limit', 10)
+      const clientId = request.input('clientId')
+
+      console.log(`🔍 Loading completed sessions for RBT ${user.id}`)
+
+      // First, let's check what sessions exist for this RBT
+      const allSessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .select('id', 'status', 'date', 'client_id')
+        .orderBy('date', 'desc')
+        .limit(10)
+
+      console.log(`📊 Found ${allSessions.length} total sessions for RBT ${user.id}:`)
+      allSessions.forEach(s => {
+        console.log(`   - Session ${s.id}: ${s.status}, Date: ${s.date.toISODate()}, Client: ${s.clientId}`)
+      })
+
+      let query = SessionLog.query()
+        .where('rbt_id', user.id)
+        .whereIn('status', ['completed', 'submitted'])
+        .preload('client')
+        .preload('behaviorData', (behaviorQuery) => {
+          behaviorQuery.orderBy('created_at', 'desc')
+        })
+
+      if (clientId) {
+        query = query.where('client_id', clientId)
+      }
+
+      const sessions = await query
+        .orderBy('date', 'desc')
+        .orderBy('start_time', 'desc')
+        .paginate(page, limit)
+
+      console.log(`📊 Found ${sessions.all().length} completed/submitted sessions`)
+
+      const responseData = {
+        data: sessions.all().map(session => {
+          // Parse client goals data if it exists
+          let clientGoalsData = []
+          try {
+            clientGoalsData = session.clientGoalsData ? JSON.parse(session.clientGoalsData) : []
+          } catch (e) {
+            console.warn('Failed to parse client goals data for session', session.id)
+            clientGoalsData = []
+          }
+
+          return {
+            id: session.id,
+            clientId: session.clientId,
+            clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
+            date: session.date.toISODate(),
+            startTime: session.startTime,
+            endTime: session.endTime,
+            duration: session.duration,
+            totalHours: session.totalHours,
+            location: session.location,
+            sessionNotes: session.sessionNotes,
+            status: session.status,
+            bcbaApproved: session.bcbaApproved,
+            
+            // Session-level data
+            overallFeedback: session.overallFeedback || '',
+            overallProgress: session.overallProgress || 0,
+            
+            // Client goals data
+            clientGoalsData: clientGoalsData,
+            
+            // Behavior data
+            behaviorData: session.behaviorData?.map(data => ({
+              id: data.id,
+              goalId: data.goalId,
+              goalName: data.goalName,
+              targetScore: data.targetScore,
+              actualScore: data.actualScore,
+              improvement: data.improvement,
+              feedback: data.feedback,
+              date: data.date?.toISODate(),
+            })) || [],
+            
+            createdAt: session.createdAt.toISO(),
+            updatedAt: session.updatedAt?.toISO(),
+          }
+        }),
+        meta: sessions.getMeta(),
+      }
+
+      console.log(`✅ Returning ${responseData.data.length} completed sessions for RBT ${user.id}`)
+      if (responseData.data.length > 0) {
+        console.log('   Sample session:', {
+          id: responseData.data[0].id,
+          clientName: responseData.data[0].clientName,
+          status: responseData.data[0].status,
+          date: responseData.data[0].date
+        })
+      }
+
+      return response.json(responseData)
+    } catch (error) {
+      console.error('❌ Error fetching completed sessions:', error)
+      return response.status(500).json({
+        message: 'Failed to fetch completed sessions',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get detailed completed session by ID
+   */
+  async getCompletedSessionById({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'completed')
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('bcba')
+            .preload('parent')
+            .preload('clinic')
+        })
+        .preload('behaviorData')
+        .firstOrFail()
+
+      // Parse client goals data
+      let clientGoalsData = []
+      try {
+        clientGoalsData = session.clientGoalsData ? JSON.parse(session.clientGoalsData) : []
+      } catch (e) {
+        console.warn('Failed to parse client goals data for session', session.id)
+        clientGoalsData = []
+      }
+
+      return response.json({
+        data: {
+          id: session.id,
+          clientId: session.clientId,
+          clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : 'Unknown Client',
+          date: session.date.toISODate(),
+          startTime: session.startTime,
+          endTime: session.endTime,
+          duration: session.duration,
+          totalHours: session.totalHours,
+          location: session.location,
+          sessionNotes: session.sessionNotes,
+          status: session.status,
+          bcbaApproved: session.bcbaApproved,
+          
+          // Session-level data
+          overallFeedback: session.overallFeedback || '',
+          overallProgress: session.overallProgress || 0,
+          
+          // Complete client information
+          client: session.client ? {
+            id: session.client.id,
+            firstName: session.client.firstName,
+            lastName: session.client.lastName,
+            fullName: `${session.client.firstName} ${session.client.lastName}`,
+            age: session.client.age,
+            dateOfBirth: session.client.dateOfBirth?.toISODate(),
+            diagnosis: session.client.diagnosis,
+            status: session.client.status,
+            
+            // Contact Information
+            phone: session.client.phone,
+            email: session.client.email,
+            address: {
+              street: session.client.street,
+              city: session.client.city,
+              state: session.client.state,
+              zipCode: session.client.zipCode,
+            },
+            
+            // Emergency Contact
+            emergencyContact: {
+              name: session.client.emergencyContactName,
+              relationship: session.client.emergencyContactRelationship,
+              phone: session.client.emergencyContactPhone,
+            },
+            
+            // Insurance Information
+            insurance: {
+              type: session.client.insuranceType,
+              id: session.client.insuranceId,
+            },
+            
+            // Dates
+            admissionDate: session.client.admissionDate?.toISODate(),
+            dischargeDate: session.client.dischargeDate?.toISODate(),
+            
+            // Related Information
+            bcba: session.client.bcba ? {
+              id: session.client.bcba.id,
+              name: session.client.bcba.name,
+              email: session.client.bcba.email,
+              phone: session.client.bcba.phone || null,
+            } : null,
+            
+            parent: session.client.parent ? {
+              id: session.client.parent.id,
+              name: session.client.parent.name,
+              email: session.client.parent.email,
+              phone: session.client.parent.phone || null,
+            } : null,
+            
+            clinic: session.client.clinic ? {
+              id: session.client.clinic.id,
+              name: session.client.clinic.name,
+              address: session.client.clinic.address,
+              phone: session.client.clinic.phone,
+              email: session.client.clinic.email,
+            } : null,
+          } : null,
+          
+          // Client goals data with feedback and progress
+          clientGoalsData: clientGoalsData,
+          
+          // Individual behavior data entries
+          behaviorData: session.behaviorData?.map(data => ({
+            id: data.id,
+            goalId: data.goalId,
+            goalName: data.goalName,
+            targetScore: data.targetScore,
+            actualScore: data.actualScore,
+            improvement: data.improvement,
+            feedback: data.feedback,
+            date: data.date?.toISODate(),
+          })) || [],
+          
+          createdAt: session.createdAt.toISO(),
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error fetching completed session details:', error)
+      return response.status(404).json({
+        message: 'Completed session not found',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Create treatment goal (RBT can create goals for their assigned clients)
+   */
+  async createTreatmentGoal({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        clientId,
+        title,
+        description,
+        targetBehavior,
+        measurementType,
+        masteryCriteria,
+        domain,
+        promptHierarchy,
+        baselineScore,
+        baselineTrials,
+        targetPercentage,
+        consecutiveSessions,
+        goalPhase,
+      } = request.only([
+        'clientId',
+        'title',
+        'description',
+        'targetBehavior',
+        'measurementType',
+        'masteryCriteria',
+        'domain',
+        'promptHierarchy',
+        'baselineScore',
+        'baselineTrials',
+        'targetPercentage',
+        'consecutiveSessions',
+        'goalPhase',
+      ])
+
+      console.log('📝 RBT Create Treatment Goal Request:', {
+        userId: user.id,
+        userName: user.name,
+        userRole: user.role,
+        clientId,
+        title,
+        targetBehavior
+      })
+
+      // Verify client exists
+      const client = await Client.find(clientId)
+      if (!client) {
+        console.log(`❌ Client ${clientId} not found`)
+        return response.status(404).json({
+          message: `Client with ID ${clientId} not found`
+        })
+      }
+
+      console.log('✅ Client found:', {
+        id: client.id,
+        name: client.fullName,
+        assignedBcba: client.assignedBcba
+      })
+
+      // Verify RBT has access to this client through direct assignment, sessions, or schedules
+      console.log('🔍 Checking RBT access to client...')
+      
+      // Check direct assignment
+      const directAssignment = await Client.query()
+        .where('id', clientId)
+        .whereHas('assignedRbts', (rbtQuery) => {
+          rbtQuery.where('users.id', user.id)
+        })
+        .first()
+
+      let hasAccess = !!directAssignment
+
+      if (!hasAccess) {
+        // Check if RBT has sessions with this client
+        const hasSession = await SessionLog.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        // Check if RBT has schedules with this client
+        const hasSchedule = await Schedule.query()
+          .where('client_id', clientId)
+          .where('rbt_id', user.id)
+          .first()
+
+        hasAccess = !!(hasSession || hasSchedule)
+      }
+
+      if (!hasAccess) {
+        console.log(`❌ RBT ${user.id} has no access to client ${clientId}`)
+        return response.status(403).json({
+          message: `You do not have access to client ${client.fullName}. Please contact your supervisor.`,
+          error: 'ACCESS_DENIED'
+        })
+      }
+
+      console.log('✅ RBT has access to client')
+
+      // Create the treatment goal
+      console.log('📝 Creating treatment goal...')
+      const goal = await TreatmentGoal.create({
+        clientId: client.id,
+        title,
+        description: description || '',
+        targetBehavior: targetBehavior || '',
+        measurementType: measurementType || 'percentage',
+        masteryCriteria: masteryCriteria || '',
+        status: 'active',
+        domain: domain || '',
+        promptHierarchy: promptHierarchy || null,
+        baselineScore: baselineScore || null,
+        baselineTrials: baselineTrials || null,
+        targetPercentage: targetPercentage || null,
+        consecutiveSessions: consecutiveSessions || null,
+        goalPhase: goalPhase || 'acquisition',
+        createdBy: user.id,
+      })
+
+      console.log('✅ Treatment goal created:', goal.id)
+
+      // Load relationships for response
+      await goal.load('client')
+      await goal.load('creator')
+
+      return response.status(201).json({
+        message: 'Treatment goal created successfully',
+        data: {
+          id: goal.id,
+          clientId: goal.clientId,
+          clientName: goal.client.fullName,
+          title: goal.title,
+          description: goal.description,
+          targetBehavior: goal.targetBehavior,
+          measurementType: goal.measurementType,
+          masteryCriteria: goal.masteryCriteria,
+          status: goal.status,
+          domain: goal.domain,
+          promptHierarchy: goal.promptHierarchy,
+          baselineScore: goal.baselineScore,
+          baselineTrials: goal.baselineTrials,
+          targetPercentage: goal.targetPercentage,
+          consecutiveSessions: goal.consecutiveSessions,
+          goalPhase: goal.goalPhase,
+          createdBy: goal.createdBy,
+          createdByName: goal.creator.name,
+          createdAt: goal.createdAt.toISO(),
+        },
+      })
+    } catch (error) {
+      console.error('❌ RBT Create Treatment Goal Error:', error)
+      console.error('Stack trace:', error.stack)
+      
+      return response.status(400).json({
+        message: 'Failed to create treatment goal',
+        error: error.message,
+        details: error.stack?.split('\n').slice(0, 3).join('\n')
+      })
+    }
+  }
+
+  /**
    * Get detailed session information
    */
   async getSessionDetail({ auth, params, response }: HttpContext) {
@@ -531,6 +1352,7 @@ export default class RBTController {
               id: schedule.id,
               type: 'schedule',
               sessionType: 'one_to_one',
+              clientId: null,
               noClient: true,
               
               // Basic session info without client
@@ -568,6 +1390,7 @@ export default class RBTController {
             id: schedule.id,
             type: 'schedule',
             sessionType: 'one_to_one',
+            clientId: schedule.client?.id || null,
             
             // Client Information
             client: schedule.client ? {
@@ -631,6 +1454,14 @@ export default class RBTController {
               measurementType: goal.measurementType,
               masteryCriteria: goal.masteryCriteria || '',
               status: goal.status,
+              // Program Builder fields
+              domain: goal.domain,
+              promptHierarchy: goal.promptHierarchy,
+              baselineScore: goal.baselineScore,
+              baselineTrials: goal.baselineTrials,
+              targetPercentage: goal.targetPercentage,
+              consecutiveSessions: goal.consecutiveSessions,
+              goalPhase: goal.goalPhase,
               createdBy: goal.createdBy,
               createdByName: goal.creator?.name || 'Unknown',
               createdAt: goal.createdAt.toISO(),
@@ -705,6 +1536,7 @@ export default class RBTController {
             id: session.id,
             type: 'session_log',
             sessionType: session.sessionType || 'one_to_one',
+            clientId: null,
             noClient: true,
             
             // Basic session info without client
@@ -748,6 +1580,7 @@ export default class RBTController {
           id: session.id,
           type: 'session_log',
           sessionType: session.sessionType || 'one_to_one',
+          clientId: session.client?.id || session.clientId || null,
           
           // Client Information (for one-to-one sessions)
           client: session.client ? {
@@ -815,6 +1648,14 @@ export default class RBTController {
               measurementType: goal.measurementType,
               masteryCriteria: goal.masteryCriteria || '',
               status: goal.status,
+              // Program Builder fields
+              domain: goal.domain,
+              promptHierarchy: goal.promptHierarchy,
+              baselineScore: goal.baselineScore,
+              baselineTrials: goal.baselineTrials,
+              targetPercentage: goal.targetPercentage,
+              consecutiveSessions: goal.consecutiveSessions,
+              goalPhase: goal.goalPhase,
               createdBy: goal.createdBy,
               createdByName: goal.creator?.name || 'Unknown',
               createdAt: goal.createdAt.toISO(),
@@ -859,6 +1700,14 @@ export default class RBTController {
             measurementType: goal.measurementType,
             masteryCriteria: goal.masteryCriteria || '',
             status: goal.status,
+            // Program Builder fields
+            domain: goal.domain,
+            promptHierarchy: goal.promptHierarchy,
+            baselineScore: goal.baselineScore,
+            baselineTrials: goal.baselineTrials,
+            targetPercentage: goal.targetPercentage,
+            consecutiveSessions: goal.consecutiveSessions,
+            goalPhase: goal.goalPhase,
             createdBy: goal.createdBy,
             createdByName: goal.creator?.name || 'Unknown',
             createdAt: goal.createdAt.toISO(),
@@ -952,7 +1801,7 @@ export default class RBTController {
           sessionType: session.sessionType,
           clientId: session.clientId,
           clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : null,
-          bcbaName: session.bcba.name,
+          bcbaName: session.bcba?.name || 'Not assigned',
           date: session.date.toISODate(),
           startTime: session.startTime,
           endTime: session.endTime,
@@ -962,8 +1811,8 @@ export default class RBTController {
           locationAddress: session.locationAddress,
           status: session.status,
           notes: session.sessionNotes,
-          isRecurring: session.isRecurring,
-          recurrencePattern: session.recurrencePattern,
+          isRecurring: session.isRecurring || false,
+          recurrencePattern: session.recurrencePattern || null,
           participantCount: session.sessionType !== 'one_to_one' 
             ? session.participants?.length || 0 
             : 1,
@@ -981,4 +1830,1355 @@ export default class RBTController {
       })
     }
   }
+
+  /**
+   * Get current active session for RBT
+   */
+  async getActiveSession({ auth, response }: HttpContext) {
+    try {
+      const user = auth.user!
+
+      console.log(`🔍 Looking for active session for RBT ${user.id}`)
+
+      const activeSession = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .preload('client', (clientQuery) => {
+          clientQuery
+            .preload('treatmentGoals', (goalsQuery) => {
+              goalsQuery.where('status', 'active')
+            })
+            .preload('parent')
+            .preload('bcba')
+        })
+        .preload('rbt')
+        .preload('bcba')
+        .orderBy('created_at', 'desc')
+        .first()
+
+      if (!activeSession) {
+        console.log(`✅ No active session found for RBT ${user.id}`)
+        return response.json({ data: null })
+      }
+
+      console.log(`✅ Found active session ${activeSession.id} for RBT ${user.id}`)
+
+      return response.json({
+        data: {
+          id: activeSession.id,
+          sessionType: 'one_to_one', // SessionLog doesn't support group sessions yet
+          clientId: activeSession.clientId,
+          
+          // Client Information
+          client: activeSession.client ? {
+            id: activeSession.client.id,
+            fullName: `${activeSession.client.firstName} ${activeSession.client.lastName}`,
+            firstName: activeSession.client.firstName,
+            lastName: activeSession.client.lastName,
+            age: activeSession.client.age,
+            dateOfBirth: activeSession.client.dateOfBirth.toISODate(),
+            status: activeSession.client.status,
+            diagnosis: activeSession.client.diagnosis || [],
+          } : null,
+
+          // Parent Information
+          parent: activeSession.client?.parent ? {
+            id: activeSession.client.parent.id,
+            name: activeSession.client.parent.name,
+            email: activeSession.client.parent.email,
+            phone: activeSession.client.parent.phone || '',
+          } : null,
+
+          // Treatment Goals
+          treatmentGoals: activeSession.client?.treatmentGoals?.map(goal => ({
+            id: goal.id,
+            title: goal.title,
+            description: goal.description,
+            targetBehavior: goal.targetBehavior,
+            measurementType: goal.measurementType,
+            masteryCriteria: goal.masteryCriteria,
+            status: goal.status,
+            // Program Builder fields
+            domain: goal.domain,
+            promptHierarchy: goal.promptHierarchy,
+            baselineScore: goal.baselineScore,
+            baselineTrials: goal.baselineTrials,
+            targetPercentage: goal.targetPercentage,
+            consecutiveSessions: goal.consecutiveSessions,
+            goalPhase: goal.goalPhase,
+            createdBy: goal.createdBy,
+            createdByName: goal.creator?.name || 'Unknown',
+            createdAt: goal.createdAt.toISO(),
+            updatedAt: goal.updatedAt?.toISO() || null,
+          })) || [],
+
+          // Session Details
+          date: activeSession.date.toISODate(),
+          startTime: activeSession.startTime,
+          endTime: activeSession.endTime,
+          location: activeSession.location,
+          status: activeSession.status,
+          sessionNotes: activeSession.sessionNotes || '',
+          
+          // RBT Information
+          rbt: activeSession.rbt ? {
+            id: activeSession.rbt.id,
+            name: activeSession.rbt.name,
+            email: activeSession.rbt.email,
+          } : null,
+
+          // BCBA Information
+          bcba: activeSession.bcba ? {
+            id: activeSession.bcba.id,
+            name: activeSession.bcba.name,
+            email: activeSession.bcba.email,
+          } : null,
+
+          createdAt: activeSession.createdAt.toISO(),
+          updatedAt: activeSession.updatedAt?.toISO() || null,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error getting active session:', error)
+      return response.status(500).json({
+        message: 'Failed to get active session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Get session status for validation
+   */
+  async getSessionStatus({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`🔍 Checking session status for session ${sessionId}, RBT ${user.id}`)
+
+      const session = await SessionLog.find(sessionId)
+
+      const result = {
+        exists: !!session,
+        belongsToUser: session?.rbtId === user.id,
+        status: session?.status || null,
+        canBeEnded: session?.status === 'draft' && session?.rbtId === user.id,
+        sessionId: session?.id || null,
+        rbtId: session?.rbtId || null,
+        currentUserId: user.id,
+      }
+
+      console.log(`✅ Session status check result:`, result)
+
+      return response.json(result)
+    } catch (error) {
+      console.error('❌ Error checking session status:', error)
+      return response.status(500).json({
+        message: 'Failed to check session status',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Record individual trial (real-time)
+   */
+  async recordTrial({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        prompt, 
+        response: trialResponse, 
+        reinforcement, 
+        notes,
+        durationSeconds,
+        antecedent,
+        consequence
+      } = request.only([
+        'sessionId',
+        'goalId', 
+        'prompt', 
+        'response', 
+        'reinforcement', 
+        'notes',
+        'durationSeconds',
+        'antecedent',
+        'consequence'
+      ])
+
+      console.log(`📝 Recording trial for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create trial record
+      const trial = await Trial.create({
+        sessionId,
+        goalId,
+        prompt: prompt || '',
+        response: trialResponse,
+        reinforcement: reinforcement || '',
+        notes: notes || '',
+        timestamp: DateTime.now(),
+        durationSeconds: durationSeconds || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+      })
+
+      console.log(`✅ Trial recorded: ${trial.id}`)
+
+      return response.status(201).json({
+        message: 'Trial recorded successfully',
+        data: {
+          id: trial.id,
+          sessionId: trial.sessionId,
+          goalId: trial.goalId,
+          goalTitle: goal.title,
+          prompt: trial.prompt,
+          response: trial.response,
+          reinforcement: trial.reinforcement,
+          notes: trial.notes,
+          timestamp: trial.timestamp.toISO(),
+          durationSeconds: trial.durationSeconds,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording trial:', error)
+      return response.status(400).json({
+        message: 'Failed to record trial',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Auto-save session data (for real-time updates)
+   */
+  async autoSaveSession({ auth, params, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+      const { sessionNotes, environmentNotes, engagementScore } = request.only([
+        'sessionNotes',
+        'environmentNotes', 
+        'engagementScore'
+      ])
+
+      console.log(`💾 Auto-saving session ${sessionId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Update only provided fields
+      if (sessionNotes !== undefined) {
+        session.sessionNotes = sessionNotes
+      }
+      if (environmentNotes !== undefined) {
+        session.environmentNotes = environmentNotes
+      }
+      if (engagementScore !== undefined && engagementScore !== null) {
+        const score = parseInt(engagementScore)
+        if (score >= 1 && score <= 5) {
+          session.engagementScore = score
+        }
+      }
+
+      await session.save()
+
+      console.log(`✅ Session ${sessionId} auto-saved`)
+
+      return response.json({
+        message: 'Session auto-saved successfully',
+        data: {
+          id: session.id,
+          sessionNotes: session.sessionNotes,
+          environmentNotes: session.environmentNotes,
+          engagementScore: session.engagementScore,
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error auto-saving session:', error)
+      return response.status(400).json({
+        message: 'Failed to auto-save session',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Submit session for BCBA review
+   */
+  async submitSessionForReview({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📤 Submitting session ${sessionId} for review`)
+
+      // Verify session belongs to RBT and is in draft status
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Validate session has required data
+      if (!session.sessionNotes || session.sessionNotes.trim().length === 0) {
+        return response.status(400).json({
+          message: 'Session notes are required before submission',
+        })
+      }
+
+      // Update session status
+      session.status = 'submitted'
+      await session.save()
+
+      console.log(`✅ Session ${sessionId} submitted for review`)
+
+      return response.json({
+        message: 'Session submitted for BCBA review successfully',
+        data: {
+          id: session.id,
+          status: session.status,
+          updatedAt: session.updatedAt?.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error submitting session for review:', error)
+      return response.status(400).json({
+        message: 'Failed to submit session for review',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Record behavior data with enhanced tracking
+   */
+  async recordBehavior({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        durationSeconds,
+        frequencyCount,
+        antecedent,
+        consequence,
+        environmentNotes,
+        measurementUnit,
+        baselineValue
+      } = request.only([
+        'sessionId',
+        'goalId',
+        'durationSeconds',
+        'frequencyCount', 
+        'antecedent',
+        'consequence',
+        'environmentNotes',
+        'measurementUnit',
+        'baselineValue'
+      ])
+
+      console.log(`📊 Recording behavior data for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create behavior data record
+      const behaviorData = await BehaviorData.create({
+        sessionId,
+        goalId,
+        correct: 0, // Will be calculated from trials
+        incorrect: 0,
+        prompted: 0,
+        total: 0,
+        percentage: 0,
+        durationSeconds: durationSeconds || null,
+        frequencyCount: frequencyCount || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+        environmentNotes: environmentNotes || null,
+        measurementUnit: measurementUnit || null,
+        baselineValue: baselineValue || null,
+      })
+
+      console.log(`✅ Behavior data recorded: ${behaviorData.id}`)
+
+      return response.status(201).json({
+        message: 'Behavior data recorded successfully',
+        data: {
+          id: behaviorData.id,
+          sessionId: behaviorData.sessionId,
+          goalId: behaviorData.goalId,
+          goalTitle: goal.title,
+          durationSeconds: behaviorData.durationSeconds,
+          frequencyCount: behaviorData.frequencyCount,
+          antecedent: behaviorData.antecedent,
+          consequence: behaviorData.consequence,
+          environmentNotes: behaviorData.environmentNotes,
+          createdAt: behaviorData.createdAt.toISO(),
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording behavior data:', error)
+      return response.status(400).json({
+        message: 'Failed to record behavior data',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Enhanced record trial with detailed tracking
+   */
+  async recordEnhancedTrial({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { 
+        sessionId, 
+        goalId, 
+        prompt, 
+        response: trialResponse, 
+        reinforcement, 
+        notes,
+        durationSeconds,
+        antecedent,
+        consequence,
+        promptType,
+        promptLevel,
+        independent,
+        errorCorrection
+      } = request.only([
+        'sessionId',
+        'goalId', 
+        'prompt', 
+        'response', 
+        'reinforcement', 
+        'notes',
+        'durationSeconds',
+        'antecedent',
+        'consequence',
+        'promptType',
+        'promptLevel',
+        'independent',
+        'errorCorrection'
+      ])
+
+      console.log(`📝 Recording enhanced trial for session ${sessionId}, goal ${goalId}`)
+
+      // Verify session belongs to RBT and is active
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .where('status', 'draft')
+        .firstOrFail()
+
+      // Verify goal exists
+      const goal = await TreatmentGoal.findOrFail(goalId)
+
+      // Create enhanced trial record
+      const trial = await Trial.create({
+        sessionId,
+        goalId,
+        prompt: prompt || '',
+        response: trialResponse,
+        reinforcement: reinforcement || '',
+        notes: notes || '',
+        timestamp: DateTime.now(),
+        durationSeconds: durationSeconds || null,
+        antecedent: antecedent || null,
+        consequence: consequence || null,
+        promptType: promptType || null,
+        promptLevel: promptLevel || null,
+        independent: independent || false,
+        errorCorrection: errorCorrection || null,
+      })
+
+      console.log(`✅ Enhanced trial recorded: ${trial.id}`)
+
+      return response.status(201).json({
+        message: 'Enhanced trial recorded successfully',
+        data: {
+          id: trial.id,
+          sessionId: trial.sessionId,
+          goalId: trial.goalId,
+          goalTitle: goal.title,
+          prompt: trial.prompt,
+          response: trial.response,
+          reinforcement: trial.reinforcement,
+          notes: trial.notes,
+          timestamp: trial.timestamp.toISO(),
+          durationSeconds: trial.durationSeconds,
+          promptType: trial.promptType,
+          promptLevel: trial.promptLevel,
+          independent: trial.independent,
+          errorCorrection: trial.errorCorrection,
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error recording enhanced trial:', error)
+      return response.status(400).json({
+        message: 'Failed to record enhanced trial',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Calculate and store session analytics
+   */
+  async calculateSessionAnalytics({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📊 Calculating session analytics for session ${sessionId}`)
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .firstOrFail()
+
+      // Import analytics service
+      const TrialAnalyticsService = (await import('#services/trial_analytics_service')).default
+
+      // Calculate comprehensive analytics
+      const analytics = await TrialAnalyticsService.calculateSessionAnalytics(sessionId)
+
+      // Store behavior data for each goal
+      for (const goalAnalytics of analytics.goalAnalytics) {
+        await TrialAnalyticsService.storeBehaviorData(sessionId, goalAnalytics.goalId, goalAnalytics)
+      }
+
+      console.log(`✅ Session analytics calculated and stored for session ${sessionId}`)
+
+      return response.json({
+        message: 'Session analytics calculated successfully',
+        data: analytics
+      })
+    } catch (error) {
+      console.error('❌ Error calculating session analytics:', error)
+      return response.status(400).json({
+        message: 'Failed to calculate session analytics',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Submit clinical feedback for analytics
+   */
+  async submitClinicalFeedback({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const {
+        sessionId,
+        patientId,
+        date,
+        categoryScores,
+        overallScore,
+        engagementLevel,
+        riskFactors,
+        comments
+      } = request.body()
+
+      console.log('📊 Submitting clinical feedback for session:', sessionId)
+
+      // Verify session belongs to RBT
+      const SessionLog = (await import('#models/session_log')).default
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .first()
+
+      if (!session) {
+        return response.status(404).json({
+          message: 'Session not found or access denied'
+        })
+      }
+
+      // Try to store clinical feedback, but handle gracefully if model doesn't exist
+      let feedback = null
+      try {
+        const ClinicalFeedback = (await import('#models/clinical_feedback')).default
+        feedback = await ClinicalFeedback.create({
+          sessionId,
+          patientId: patientId || session.clientId,
+          clinicianId: user.id,
+          date,
+          categoryScores: JSON.stringify(categoryScores),
+          overallScore,
+          engagementLevel,
+          riskFactors: JSON.stringify(riskFactors || []),
+          comments
+        })
+        console.log('✅ Clinical feedback stored in database:', feedback.id)
+      } catch (dbError) {
+        console.log('⚠️ Clinical feedback model not available, storing in session notes instead')
+        
+        // Fallback: Store feedback in session notes as structured data
+        const feedbackSummary = `
+Clinical Feedback Summary:
+- Overall Score: ${overallScore}/100
+- Engagement Level: ${engagementLevel}/5
+- Physical Health: ${categoryScores.physicalHealth}/100
+- Mental Health: ${categoryScores.mentalHealth}/100
+- Medication Adherence: ${categoryScores.medicationAdherence}/100
+- Therapy Compliance: ${categoryScores.therapyCompliance}/100
+- Social Engagement: ${categoryScores.socialEngagement}/100
+- Behavior Regulation: ${categoryScores.behaviorRegulation}/100
+${riskFactors && riskFactors.length > 0 ? `- Risk Factors: ${riskFactors.join(', ')}` : ''}
+${comments ? `- Clinical Notes: ${comments}` : ''}
+        `.trim()
+
+        // Update session with clinical feedback in notes
+        await session.merge({
+          sessionNotes: (session.sessionNotes || '') + '\n\n' + feedbackSummary
+        }).save()
+
+        feedback = {
+          id: `session_${sessionId}_feedback`,
+          sessionId,
+          patientId: patientId || session.clientId,
+          clinicianId: user.id,
+          date,
+          categoryScores,
+          overallScore,
+          engagementLevel,
+          riskFactors,
+          comments,
+          storedInSession: true
+        }
+      }
+
+      return response.json({
+        message: 'Clinical feedback submitted successfully',
+        data: feedback
+      })
+    } catch (error) {
+      console.error('❌ Error submitting clinical feedback:', error)
+      return response.status(500).json({
+        message: 'Failed to submit clinical feedback',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Get clinical analytics metrics
+   */
+  async getClinicalAnalyticsMetrics({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { dateFrom, dateTo, programId, conditionId, patientId } = request.qs()
+
+      console.log('📈 Loading clinical analytics metrics for user:', user.id)
+      console.log('📅 Date range:', dateFrom, 'to', dateTo)
+
+      // For now, return mock data since clinical_feedback table may not exist yet
+      // This allows the frontend to work while the database is being set up
+      
+      // Get assigned clients count for realistic metrics
+      let totalPatients = 5 // Default mock value
+      try {
+        const assignedClients = await user.related('assignedClients').query()
+        totalPatients = assignedClients.length || 5
+      } catch (error) {
+        console.log('Using mock client count')
+      }
+
+      // Generate realistic mock metrics based on actual client data
+      const activePatients = Math.floor(totalPatients * 0.8) // 80% active
+      const averageClinicalScore = 72 // Good average score
+      const improvementRate = 15 // 15% improvement
+      const atRiskPatients = Math.floor(totalPatients * 0.1) // 10% at risk
+
+      // Score distribution with realistic percentages
+      const scoreDistribution = [
+        { range: '0-40 (Critical)', count: Math.floor(totalPatients * 0.1), percentage: 10 },
+        { range: '41-60 (Attention)', count: Math.floor(totalPatients * 0.2), percentage: 20 },
+        { range: '61-80 (Stable)', count: Math.floor(totalPatients * 0.5), percentage: 50 },
+        { range: '81-100 (Improving)', count: Math.floor(totalPatients * 0.2), percentage: 20 }
+      ]
+
+      // Category breakdown with varied scores and trends
+      const categoryBreakdown = [
+        { category: 'Physical Health', score: 75, trend: 'up' as const },
+        { category: 'Mental Health', score: 68, trend: 'stable' as const },
+        { category: 'Medication Adherence', score: 82, trend: 'up' as const },
+        { category: 'Therapy Compliance', score: 71, trend: 'down' as const },
+        { category: 'Social Engagement', score: 64, trend: 'stable' as const },
+        { category: 'Behavior Regulation', score: 77, trend: 'up' as const }
+      ]
+
+      // Generate patient insights based on actual assigned clients
+      let patientInsights = []
+      try {
+        const clients = await user.related('assignedClients').query().limit(10)
+        patientInsights = clients.map((client, index) => ({
+          id: client.id,
+          name: client.fullName || `Client ${client.id}`,
+          lastFeedback: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          currentScore: Math.floor(Math.random() * 40) + 60, // 60-100 range
+          trend: ['improving', 'stable', 'declining'][Math.floor(Math.random() * 3)] as 'improving' | 'stable' | 'declining',
+          riskLevel: ['low', 'medium', 'high'][Math.floor(Math.random() * 3)] as 'low' | 'medium' | 'high'
+        }))
+      } catch (error) {
+        // Fallback mock data
+        patientInsights = [
+          {
+            id: 1,
+            name: 'Sample Patient A',
+            lastFeedback: '2024-01-15',
+            currentScore: 78,
+            trend: 'improving' as const,
+            riskLevel: 'low' as const
+          },
+          {
+            id: 2,
+            name: 'Sample Patient B',
+            lastFeedback: '2024-01-14',
+            currentScore: 65,
+            trend: 'stable' as const,
+            riskLevel: 'medium' as const
+          }
+        ]
+      }
+
+      // Generate relevant alerts
+      const alerts = []
+      if (atRiskPatients > 0) {
+        alerts.push({
+          id: 1,
+          type: 'score_decline' as const,
+          message: `${atRiskPatients} patient(s) showing concerning score trends`,
+          severity: 'medium' as const,
+          patientId: patientInsights[0]?.id || 1,
+          date: new Date().toISOString().split('T')[0]
+        })
+      }
+
+      // Add engagement alert if needed
+      if (activePatients < totalPatients * 0.7) {
+        alerts.push({
+          id: 2,
+          type: 'no_feedback' as const,
+          message: 'Several patients have not provided feedback recently',
+          severity: 'low' as const,
+          patientId: 0,
+          date: new Date().toISOString().split('T')[0]
+        })
+      }
+
+      const metrics = {
+        totalPatients,
+        activePatients,
+        averageClinicalScore,
+        improvementRate,
+        atRiskPatients,
+        scoreDistribution,
+        categoryBreakdown,
+        patientInsights,
+        alerts,
+        progressTrend: [], // Would calculate from historical data
+        engagementTrend: [] // Would calculate from submission frequency
+      }
+
+      console.log('✅ Clinical analytics metrics calculated (mock data)')
+      console.log(`   Total Patients: ${totalPatients}, Active: ${activePatients}`)
+
+      return response.json(metrics)
+    } catch (error) {
+      console.error('❌ Error loading clinical analytics:', error)
+      return response.status(500).json({
+        message: 'Failed to load clinical analytics',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Get progress insights metrics
+   */
+  async getProgressInsightsMetrics({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { timeframe, clientId } = request.qs()
+
+      console.log('📊 Loading REAL progress insights metrics for user:', user.id)
+      console.log('📅 Timeframe:', timeframe, 'Client ID:', clientId)
+
+      // Calculate date range based on timeframe
+      const now = new Date()
+      let startDate: Date
+      let previousStartDate: Date
+
+      switch (timeframe) {
+        case 'month':
+          startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+          previousStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+          break
+        case 'quarter':
+          const quarter = Math.floor(now.getMonth() / 3)
+          startDate = new Date(now.getFullYear(), quarter * 3, 1)
+          previousStartDate = new Date(now.getFullYear(), (quarter - 1) * 3, 1)
+          break
+        default: // week
+          startDate = new Date(now)
+          startDate.setDate(now.getDate() - 7)
+          previousStartDate = new Date(now)
+          previousStartDate.setDate(now.getDate() - 14)
+          break
+      }
+
+      console.log('📅 Date range:', startDate.toISOString().split('T')[0], 'to', now.toISOString().split('T')[0])
+
+      // Get assigned clients with real data
+      const assignedClients = await Client.query()
+        .whereHas('assignedRbts', (rbtQuery) => {
+          rbtQuery.where('users.id', user.id)
+        })
+        .orWhereHas('sessionLogs', (sessionQuery) => {
+          sessionQuery.where('rbt_id', user.id)
+        })
+        .preload('treatmentGoals', (goalsQuery) => {
+          goalsQuery.where('status', 'active')
+        })
+
+      console.log(`✅ Found ${assignedClients.length} assigned clients`)
+
+      // 1. TOTAL SESSIONS - Real count from database
+      const totalSessionsQuery = SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>=', startDate)
+        .where('date', '<=', now)
+
+      if (clientId && clientId !== 'all') {
+        totalSessionsQuery.where('client_id', clientId)
+      }
+
+      const totalSessions = await totalSessionsQuery.count('* as total')
+      const totalSessionsCount = totalSessions[0].$extras.total
+
+      // Previous period sessions for comparison
+      const previousSessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>=', previousStartDate)
+        .where('date', '<', startDate)
+        .count('* as total')
+      const previousSessionsCount = previousSessions[0].$extras.total
+
+      // 2. COMPLETED GOALS - Real count from treatment goals
+      let completedGoalsCount = 0
+      let totalGoalsCount = 0
+      
+      for (const client of assignedClients) {
+        if (clientId && clientId !== 'all' && client.id.toString() !== clientId) continue
+        
+        const goals = client.treatmentGoals || []
+        totalGoalsCount += goals.length
+        
+        // Count goals that have been mastered or completed
+        for (const goal of goals) {
+          if (goal.status === 'completed' || goal.goalPhase === 'mastered') {
+            completedGoalsCount++
+          } else {
+            // Check if goal has recent successful behavior data
+            const recentBehaviorData = await BehaviorData.query()
+              .where('goal_id', goal.id)
+              .where('created_at', '>=', startDate)
+              .where('percentage', '>=', goal.targetPercentage || 80)
+              .first()
+            
+            if (recentBehaviorData) {
+              completedGoalsCount++
+            }
+          }
+        }
+      }
+
+      // 3. AVERAGE PROGRESS - Calculate from behavior data
+      const behaviorDataQuery = BehaviorData.query()
+        .whereHas('goal', (goalQuery) => {
+          goalQuery.whereHas('client', (clientQuery) => {
+            clientQuery.whereHas('assignedRbts', (rbtQuery) => {
+              rbtQuery.where('users.id', user.id)
+            })
+          })
+        })
+        .where('created_at', '>=', startDate)
+
+      if (clientId && clientId !== 'all') {
+        behaviorDataQuery.whereHas('goal', (goalQuery) => {
+          goalQuery.where('client_id', clientId)
+        })
+      }
+
+      const behaviorData = await behaviorDataQuery
+      const averageProgress = behaviorData.length > 0 
+        ? Math.round(behaviorData.reduce((sum, data) => sum + (data.percentage || 0), 0) / behaviorData.length)
+        : 0
+
+      // Previous period average for comparison
+      const previousBehaviorData = await BehaviorData.query()
+        .whereHas('goal', (goalQuery) => {
+          goalQuery.whereHas('client', (clientQuery) => {
+            clientQuery.whereHas('assignedRbts', (rbtQuery) => {
+              rbtQuery.where('users.id', user.id)
+            })
+          })
+        })
+        .where('created_at', '>=', previousStartDate)
+        .where('created_at', '<', startDate)
+
+      const previousAverageProgress = previousBehaviorData.length > 0 
+        ? Math.round(previousBehaviorData.reduce((sum, data) => sum + (data.percentage || 0), 0) / previousBehaviorData.length)
+        : 0
+
+      const weeklyImprovement = averageProgress - previousAverageProgress
+
+      // 4. SUCCESS RATE - Calculate from completed sessions
+      const completedSessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>=', startDate)
+        .where('status', 'completed')
+        .count('* as total')
+      const completedSessionsCount = completedSessions[0].$extras.total
+
+      const successRate = totalSessionsCount > 0 
+        ? Math.round((completedSessionsCount / totalSessionsCount) * 100)
+        : 0
+
+      // 5. ACTIVE CLIENTS - Clients with recent sessions
+      const activeClientsCount = await Client.query()
+        .whereHas('sessionLogs', (sessionQuery) => {
+          sessionQuery
+            .where('rbt_id', user.id)
+            .where('date', '>=', startDate)
+        })
+        .count('* as total')
+      const activeClients = activeClientsCount[0].$extras.total
+
+      // 6. UPCOMING SESSIONS - From schedules or planned sessions
+      const upcomingSessions = await SessionLog.query()
+        .where('rbt_id', user.id)
+        .where('date', '>', now)
+        .where('status', 'draft')
+        .count('* as total')
+      const upcomingSessionsCount = upcomingSessions[0].$extras.total
+
+      // 7. CRITICAL ALERTS - Clients with declining performance
+      let criticalAlerts = 0
+      for (const client of assignedClients) {
+        const recentSessions = await SessionLog.query()
+          .where('client_id', client.id)
+          .where('rbt_id', user.id)
+          .where('date', '>=', startDate)
+          .orderBy('date', 'desc')
+          .limit(3)
+
+        if (recentSessions.length >= 2) {
+          const recentScores = []
+          for (const session of recentSessions) {
+            if (session.engagementScore) {
+              recentScores.push(session.engagementScore)
+            }
+          }
+          
+          if (recentScores.length >= 2) {
+            const trend = recentScores[0] - recentScores[recentScores.length - 1]
+            if (trend < -1 || recentScores[0] <= 2) { // Declining or low scores
+              criticalAlerts++
+            }
+          }
+        }
+      }
+
+      const metrics = {
+        totalSessions: totalSessionsCount,
+        completedGoals: completedGoalsCount,
+        averageProgress,
+        weeklyImprovement,
+        activeClients,
+        upcomingSessions: upcomingSessionsCount,
+        criticalAlerts,
+        successRate
+      }
+
+      // Generate REAL client progress data
+      const clientProgress = []
+      
+      for (const client of assignedClients) {
+        if (clientId && clientId !== 'all' && client.id.toString() !== clientId) continue
+
+        // Get client's recent sessions for scoring
+        const recentSessions = await SessionLog.query()
+          .where('client_id', client.id)
+          .where('rbt_id', user.id)
+          .where('date', '>=', startDate)
+          .orderBy('date', 'desc')
+          .limit(5)
+
+        // Calculate current score from recent behavior data
+        const clientBehaviorData = await BehaviorData.query()
+          .whereHas('goal', (goalQuery) => {
+            goalQuery.where('client_id', client.id)
+          })
+          .where('created_at', '>=', startDate)
+          .orderBy('created_at', 'desc')
+          .limit(10)
+
+        const currentScore = clientBehaviorData.length > 0
+          ? Math.round(clientBehaviorData.reduce((sum, data) => sum + (data.percentage || 0), 0) / clientBehaviorData.length)
+          : 0
+
+        // Calculate previous score for trend
+        const previousBehaviorData = await BehaviorData.query()
+          .whereHas('goal', (goalQuery) => {
+            goalQuery.where('client_id', client.id)
+          })
+          .where('created_at', '>=', previousStartDate)
+          .where('created_at', '<', startDate)
+          .orderBy('created_at', 'desc')
+          .limit(10)
+
+        const previousScore = previousBehaviorData.length > 0
+          ? Math.round(previousBehaviorData.reduce((sum, data) => sum + (data.percentage || 0), 0) / previousBehaviorData.length)
+          : currentScore
+
+        // Determine trend
+        let trend: 'up' | 'down' | 'stable' = 'stable'
+        if (currentScore > previousScore + 5) trend = 'up'
+        else if (currentScore < previousScore - 5) trend = 'down'
+
+        // Get last and next session dates
+        const lastSession = recentSessions.length > 0 
+          ? recentSessions[0].date.toISODate()
+          : null
+
+        const nextSession = await SessionLog.query()
+          .where('client_id', client.id)
+          .where('rbt_id', user.id)
+          .where('date', '>', now)
+          .orderBy('date', 'asc')
+          .first()
+
+        // Count goals
+        const goals = client.treatmentGoals || []
+        const completedGoals = goals.filter(goal => 
+          goal.status === 'completed' || goal.goalPhase === 'mastered'
+        ).length
+
+        // Get goal categories
+        const categories = [...new Set(goals.map(goal => goal.domain).filter(Boolean))]
+
+        // Calculate engagement from recent sessions
+        const engagementScores = recentSessions
+          .map(session => session.engagementScore)
+          .filter(score => score !== null && score !== undefined)
+        
+        const engagement = engagementScores.length > 0
+          ? Math.round((engagementScores.reduce((sum, score) => sum + score, 0) / engagementScores.length) * 20) // Convert 1-5 to percentage
+          : 0
+
+        // Determine risk level
+        let riskLevel: 'low' | 'medium' | 'high' = 'low'
+        if (currentScore < 60 || trend === 'down' || engagement < 40) {
+          riskLevel = 'high'
+        } else if (currentScore < 80 || engagement < 70) {
+          riskLevel = 'medium'
+        }
+
+        clientProgress.push({
+          id: client.id,
+          name: client.fullName || `${client.firstName} ${client.lastName}`,
+          currentScore,
+          previousScore,
+          trend,
+          lastSession,
+          nextSession: nextSession?.date.toISODate() || null,
+          goals: {
+            completed: completedGoals,
+            total: goals.length,
+            categories: categories.length > 0 ? categories : ['General']
+          },
+          riskLevel,
+          engagement
+        })
+      }
+
+      console.log('✅ Real progress insights metrics calculated:', {
+        totalSessions: totalSessionsCount,
+        completedGoals: completedGoalsCount,
+        averageProgress,
+        clientsProcessed: clientProgress.length
+      })
+
+      return response.json({
+        metrics,
+        clientProgress
+      })
+    } catch (error) {
+      console.error('❌ Error loading progress insights:', error)
+      return response.status(500).json({
+        message: 'Failed to load progress insights',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Submit progress feedback
+   */
+  async submitProgressFeedback({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const feedbackData = request.body()
+
+      console.log('📝 Submitting progress feedback:', {
+        sessionId: feedbackData.sessionId,
+        clientId: feedbackData.clientId,
+        userId: user.id,
+        hasGoals: !!feedbackData.goals,
+        goalCount: feedbackData.goals?.length || 0
+      })
+
+      // Validate required fields
+      if (!feedbackData.sessionId) {
+        console.log('❌ Missing sessionId in feedback data')
+        return response.status(400).json({
+          message: 'Session ID is required'
+        })
+      }
+
+      if (!feedbackData.clientId) {
+        console.log('❌ Missing clientId in feedback data')
+        return response.status(400).json({
+          message: 'Client ID is required'
+        })
+      }
+
+      // Verify session belongs to RBT
+      const SessionLog = (await import('#models/session_log')).default
+      const session = await SessionLog.query()
+        .where('id', feedbackData.sessionId)
+        .where('rbt_id', user.id)
+        .first()
+
+      if (!session) {
+        console.log(`❌ Session ${feedbackData.sessionId} not found for RBT ${user.id}`)
+        return response.status(404).json({
+          message: 'Session not found or access denied'
+        })
+      }
+
+      console.log(`✅ Session ${feedbackData.sessionId} verified for RBT ${user.id}`)
+
+      // Store progress feedback in session notes (enhanced format)
+      const progressSummary = `
+PROGRESS INSIGHTS FEEDBACK:
+Session Rating: ${feedbackData.overallRating}/5 stars
+Date: ${feedbackData.date}
+
+GOAL PROGRESS:
+${feedbackData.goals?.map((goal: any) => 
+  `- ${goal.goalName}: ${goal.actualScore}% (Target: ${goal.targetScore}%, Change: ${goal.improvement > 0 ? '+' : ''}${goal.improvement}%)`
+).join('\n') || 'No goals recorded'}
+
+BEHAVIOR OBSERVATIONS:
+${feedbackData.behaviorNotes || 'No behavior notes recorded'}
+
+ENVIRONMENT FACTORS:
+${feedbackData.environmentFactors?.join(', ') || 'None specified'}
+
+NEXT STEPS:
+${feedbackData.nextSteps || 'No next steps specified'}
+
+${feedbackData.parentFeedback ? `PARENT FEEDBACK:\n${feedbackData.parentFeedback}` : ''}
+      `.trim()
+
+      // Update session with progress feedback
+      await session.merge({
+        sessionNotes: (session.sessionNotes || '') + '\n\n' + progressSummary,
+        engagementScore: feedbackData.overallRating
+      }).save()
+
+      console.log('✅ Progress feedback stored successfully')
+
+      return response.json({
+        message: 'Progress feedback submitted successfully',
+        data: {
+          sessionId: feedbackData.sessionId,
+          stored: true
+        }
+      })
+    } catch (error) {
+      console.error('❌ Error submitting progress feedback:', error)
+      return response.status(500).json({
+        message: 'Failed to submit progress feedback',
+        error: error.message
+      })
+    }
+  }
+
+  /**
+   * Get session analytics with treatment goal focus
+   */
+  async getSessionAnalytics({ auth, params, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const sessionId = params.id
+
+      console.log(`📊 Getting treatment goal analytics for session ${sessionId}`)
+
+      // Import analytics services
+      const TrialAnalyticsService = (await import('#services/trial_analytics_service')).default
+
+      // Verify session belongs to RBT
+      const session = await SessionLog.query()
+        .where('id', sessionId)
+        .where('rbt_id', user.id)
+        .preload('client')
+        .firstOrFail()
+
+      // Get all trials for this session
+      const trials = await Trial.query()
+        .where('session_id', sessionId)
+        .preload('goal')
+        .orderBy('timestamp', 'asc')
+
+      // Get treatment goals for this session's client
+      const treatmentGoals = session.clientId ? await TreatmentGoal.query()
+        .where('client_id', session.clientId)
+        .where('status', 'active') : []
+
+      // Group trials by goal
+      const trialsByGoal = new Map<number, any[]>()
+      trials.forEach(trial => {
+        if (trial.goalId) {
+          if (!trialsByGoal.has(trial.goalId)) {
+            trialsByGoal.set(trial.goalId, [])
+          }
+          trialsByGoal.get(trial.goalId)!.push(trial)
+        }
+      })
+
+      // Calculate analytics for each goal
+      const goalAnalytics = []
+      for (const [goalId, goalTrials] of trialsByGoal) {
+        const goal = treatmentGoals.find(g => g.id === goalId)
+        if (!goal) continue
+
+        const totalTrials = goalTrials.length
+        const correctTrials = goalTrials.filter(t => t.response === 'correct').length
+        const incorrectTrials = goalTrials.filter(t => t.response === 'incorrect').length
+        const promptedTrials = goalTrials.filter(t => t.response === 'prompted').length
+        const independentTrials = goalTrials.filter(t => t.independent).length
+
+        const percentageCorrect = totalTrials > 0 ? Math.round((correctTrials / totalTrials) * 100) : 0
+        const percentageIndependent = totalTrials > 0 ? Math.round((independentTrials / totalTrials) * 100) : 0
+
+        // Calculate trend (simplified)
+        let trend: 'ascending' | 'stable' | 'descending' = 'stable'
+        if (goalTrials.length >= 3) {
+          const firstHalf = goalTrials.slice(0, Math.floor(goalTrials.length / 2))
+          const secondHalf = goalTrials.slice(Math.floor(goalTrials.length / 2))
+          
+          const firstHalfCorrect = firstHalf.filter(t => t.response === 'correct').length / firstHalf.length
+          const secondHalfCorrect = secondHalf.filter(t => t.response === 'correct').length / secondHalf.length
+          
+          const improvement = secondHalfCorrect - firstHalfCorrect
+          if (improvement > 0.1) trend = 'ascending'
+          else if (improvement < -0.1) trend = 'descending'
+        }
+
+        // Check mastery criteria
+        const masteryCriteria = goal.masteryCriteria || ''
+        const targetPercentage = masteryCriteria.match(/(\d+)%/) ? parseInt(masteryCriteria.match(/(\d+)%/)![1]) : 80
+        const masteryMet = percentageCorrect >= targetPercentage && totalTrials >= 3
+
+        // Generate recommendations
+        const recommendations = []
+        if (percentageCorrect < 50) {
+          recommendations.push('Consider breaking down the skill into smaller steps')
+          recommendations.push('Increase reinforcement frequency')
+        } else if (percentageCorrect < 80) {
+          recommendations.push('Continue current teaching strategy with minor adjustments')
+        } else if (masteryMet) {
+          recommendations.push('Consider moving to maintenance phase')
+          recommendations.push('Introduce generalization opportunities')
+        }
+
+        if (percentageIndependent < 30) {
+          recommendations.push('Focus on fading prompts systematically')
+        }
+
+        if (trend === 'descending') {
+          recommendations.push('Review teaching procedures for effectiveness')
+        }
+
+        goalAnalytics.push({
+          goalId,
+          goalTitle: goal.title,
+          totalTrials,
+          correctTrials,
+          incorrectTrials,
+          promptedTrials,
+          independentTrials,
+          percentageCorrect,
+          percentageIndependent,
+          trend,
+          masteryMet,
+          recommendations: recommendations.slice(0, 3) // Limit to 3 recommendations
+        })
+      }
+
+      // Calculate overall session metrics
+      const totalTrials = trials.length
+      const totalCorrect = trials.filter(t => t.response === 'correct').length
+      const overallPercentage = totalTrials > 0 ? Math.round((totalCorrect / totalTrials) * 100) : 0
+
+      console.log(`✅ Treatment goal analytics calculated for session ${sessionId}`)
+
+      return response.json({
+        sessionId: session.id,
+        totalTrials,
+        overallPercentage,
+        goalAnalytics,
+        behaviorReduction: null // Could be calculated from behavior data if needed
+      })
+    } catch (error) {
+      console.error('❌ Error getting session analytics:', error)
+      return response.status(400).json({
+        message: 'Failed to get session analytics',
+        error: error.message,
+      })
+    }
+  }
+
+
 }

@@ -65,6 +65,13 @@ export default class TreatmentGoalsController {
           measurementType: goal.measurementType,
           masteryCriteria: goal.masteryCriteria,
           status: goal.status,
+          domain: goal.domain,
+          promptHierarchy: goal.promptHierarchy,
+          baselineScore: goal.baselineScore,
+          baselineTrials: goal.baselineTrials,
+          targetPercentage: goal.targetPercentage,
+          consecutiveSessions: goal.consecutiveSessions,
+          goalPhase: goal.goalPhase,
           createdBy: goal.createdBy,
           createdByName: goal.creator.name,
           createdAt: goal.createdAt.toISO(),
@@ -92,6 +99,13 @@ export default class TreatmentGoalsController {
         targetBehavior,
         measurementType,
         masteryCriteria,
+        domain,
+        promptHierarchy,
+        baselineScore,
+        baselineTrials,
+        targetPercentage,
+        consecutiveSessions,
+        goalPhase,
       } = request.only([
         'clientId',
         'title',
@@ -99,9 +113,16 @@ export default class TreatmentGoalsController {
         'targetBehavior',
         'measurementType',
         'masteryCriteria',
+        'domain',
+        'promptHierarchy',
+        'baselineScore',
+        'baselineTrials',
+        'targetPercentage',
+        'consecutiveSessions',
+        'goalPhase',
       ])
 
-      // Verify BCBA has access to this client
+      // Verify user has access to this client
       const client = await Client.findOrFail(clientId)
       
       if (user.role === 'BCBA' && client.assignedBcba !== user.id) {
@@ -116,6 +137,22 @@ export default class TreatmentGoalsController {
         })
       }
 
+      if (user.role === 'RBT') {
+        // Verify RBT has access to this client
+        const hasAccess = await Client.query()
+          .where('id', clientId)
+          .whereHas('assignedRbts', (rbtQuery) => {
+            rbtQuery.where('users.id', user.id)
+          })
+          .first()
+
+        if (!hasAccess) {
+          return response.status(403).json({
+            message: 'Access denied to this client',
+          })
+        }
+      }
+
       const goal = await TreatmentGoal.create({
         clientId: client.id,
         title,
@@ -124,6 +161,13 @@ export default class TreatmentGoalsController {
         measurementType,
         masteryCriteria,
         status: 'active',
+        domain,
+        promptHierarchy,
+        baselineScore,
+        baselineTrials,
+        targetPercentage,
+        consecutiveSessions,
+        goalPhase: goalPhase || 'acquisition',
         createdBy: user.id,
       })
 
@@ -142,6 +186,13 @@ export default class TreatmentGoalsController {
           measurementType: goal.measurementType,
           masteryCriteria: goal.masteryCriteria,
           status: goal.status,
+          domain: goal.domain,
+          promptHierarchy: goal.promptHierarchy,
+          baselineScore: goal.baselineScore,
+          baselineTrials: goal.baselineTrials,
+          targetPercentage: goal.targetPercentage,
+          consecutiveSessions: goal.consecutiveSessions,
+          goalPhase: goal.goalPhase,
           createdBy: goal.createdBy,
           createdByName: goal.creator.name,
           createdAt: goal.createdAt.toISO(),
@@ -169,6 +220,13 @@ export default class TreatmentGoalsController {
         'measurementType',
         'masteryCriteria',
         'status',
+        'domain',
+        'promptHierarchy',
+        'baselineScore',
+        'baselineTrials',
+        'targetPercentage',
+        'consecutiveSessions',
+        'goalPhase',
       ])
 
       const goal = await TreatmentGoal.query()
@@ -206,6 +264,13 @@ export default class TreatmentGoalsController {
           measurementType: goal.measurementType,
           masteryCriteria: goal.masteryCriteria,
           status: goal.status,
+          domain: goal.domain,
+          promptHierarchy: goal.promptHierarchy,
+          baselineScore: goal.baselineScore,
+          baselineTrials: goal.baselineTrials,
+          targetPercentage: goal.targetPercentage,
+          consecutiveSessions: goal.consecutiveSessions,
+          goalPhase: goal.goalPhase,
           createdBy: goal.createdBy,
           createdByName: goal.creator.name,
           updatedAt: goal.updatedAt?.toISO(),
@@ -253,6 +318,93 @@ export default class TreatmentGoalsController {
     } catch (error) {
       return response.status(400).json({
         message: 'Failed to delete treatment goal',
+        error: error.message,
+      })
+    }
+  }
+
+  /**
+   * Bulk create treatment goals
+   */
+  async bulkCreate({ auth, request, response }: HttpContext) {
+    try {
+      const user = auth.user!
+      const { clientId, goals } = request.only(['clientId', 'goals'])
+
+      if (!Array.isArray(goals) || goals.length === 0) {
+        return response.status(400).json({
+          message: 'Goals array is required and must not be empty',
+        })
+      }
+
+      // Verify BCBA has access to this client
+      const client = await Client.findOrFail(clientId)
+      
+      if (user.role === 'BCBA' && client.assignedBcba !== user.id) {
+        return response.status(403).json({
+          message: 'Access denied to this client',
+        })
+      }
+
+      if (user.role === 'CLINIC' && client.clinicId !== user.clinicId) {
+        return response.status(403).json({
+          message: 'Access denied to this client',
+        })
+      }
+
+      // Create all goals
+      const createdGoals = []
+      for (const goalData of goals) {
+        const goal = await TreatmentGoal.create({
+          clientId: client.id,
+          title: goalData.title,
+          description: goalData.description,
+          targetBehavior: goalData.targetBehavior,
+          measurementType: goalData.measurementType,
+          masteryCriteria: goalData.masteryCriteria,
+          status: 'active',
+          domain: goalData.domain,
+          promptHierarchy: goalData.promptHierarchy,
+          baselineScore: goalData.baselineScore,
+          baselineTrials: goalData.baselineTrials,
+          targetPercentage: goalData.targetPercentage,
+          consecutiveSessions: goalData.consecutiveSessions,
+          goalPhase: goalData.goalPhase || 'acquisition',
+          createdBy: user.id,
+        })
+
+        await goal.load('client')
+        await goal.load('creator')
+        createdGoals.push(goal)
+      }
+
+      return response.status(201).json({
+        message: `${createdGoals.length} treatment goals created successfully`,
+        data: createdGoals.map(goal => ({
+          id: goal.id,
+          clientId: goal.clientId,
+          clientName: goal.client.fullName,
+          title: goal.title,
+          description: goal.description,
+          targetBehavior: goal.targetBehavior,
+          measurementType: goal.measurementType,
+          masteryCriteria: goal.masteryCriteria,
+          status: goal.status,
+          domain: goal.domain,
+          promptHierarchy: goal.promptHierarchy,
+          baselineScore: goal.baselineScore,
+          baselineTrials: goal.baselineTrials,
+          targetPercentage: goal.targetPercentage,
+          consecutiveSessions: goal.consecutiveSessions,
+          goalPhase: goal.goalPhase,
+          createdBy: goal.createdBy,
+          createdByName: goal.creator.name,
+          createdAt: goal.createdAt.toISO(),
+        })),
+      })
+    } catch (error) {
+      return response.status(400).json({
+        message: 'Failed to bulk create treatment goals',
         error: error.message,
       })
     }

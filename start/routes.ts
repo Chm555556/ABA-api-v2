@@ -108,6 +108,7 @@ router.group(() => {
       router.put('/sessions/:id/review', [BCBAController, 'reviewSession'])
       router.get('/treatment-goals', [BCBAController, 'getTreatmentGoals'])
       router.post('/treatment-goals', [BCBAController, 'createTreatmentGoal'])
+      router.post('/treatment-goals/bulk', [TreatmentGoalsController, 'bulkCreate'])
       router.get('/progress-reports', [BCBAController, 'getProgressReports'])
       router.get('/progress-reports/:id', [BCBAController, 'getProgressReport'])
       router.post('/progress-reports', [BCBAController, 'generateProgressReport'])
@@ -124,13 +125,41 @@ router.group(() => {
       router.get('/clients', [RBTController, 'getAssignedClients'])
       router.get('/schedule', [RBTController, 'getSchedule'])
       router.get('/sessions/history', [RBTController, 'getSessionHistory'])
+      
+      // Enhanced session management (specific routes first)
+      router.get('/sessions/active', [RBTController, 'getActiveSession'])
+      router.get('/sessions/completed', [RBTController, 'getCompletedSessions'])
+      router.get('/sessions/completed/:id', [RBTController, 'getCompletedSessionById'])
+      router.get('/sessions/:id/status', [RBTController, 'getSessionStatus'])
+      router.get('/sessions/:id/analytics', [RBTController, 'getSessionAnalytics'])
+      
+      // Generic session detail (must come after specific routes)
       router.get('/sessions/:id', [RBTController, 'getSessionDetail'])
       
       // Session management
       router.post('/sessions/start', [RBTController, 'startSession'])
       router.put('/sessions/:id/end', [RBTController, 'endSession'])
+      router.post('/sessions/:id/complete', [RBTController, 'completeSession'])
+      router.post('/sessions/feedback', [RBTController, 'saveSessionFeedback'])
       router.post('/sessions/behavior-data', [RBTController, 'logBehaviorData'])
       router.post('/sessions/incidents', [RBTController, 'logIncident'])
+      router.post('/sessions/record-trial', [RBTController, 'recordTrial'])
+      router.post('/sessions/record-enhanced-trial', [RBTController, 'recordEnhancedTrial'])
+      router.post('/sessions/record-behavior', [RBTController, 'recordBehavior'])
+      router.post('/sessions/:id/calculate-analytics', [RBTController, 'calculateSessionAnalytics'])
+      router.put('/sessions/:id/auto-save', [RBTController, 'autoSaveSession'])
+      router.put('/sessions/:id/submit-for-review', [RBTController, 'submitSessionForReview'])
+      
+      // Clinical Analytics routes
+      router.post('/clinical-analytics/feedback', [RBTController, 'submitClinicalFeedback'])
+      router.get('/clinical-analytics/metrics', [RBTController, 'getClinicalAnalyticsMetrics'])
+      
+      // Progress Insights routes
+      router.get('/progress-insights/metrics', [RBTController, 'getProgressInsightsMetrics'])
+      router.post('/progress-insights/feedback', [RBTController, 'submitProgressFeedback'])
+      
+      // Treatment Goals routes
+      router.post('/treatment-goals', [RBTController, 'createTreatmentGoal'])
     }).prefix('/rbt').use(middleware.role({ roles: ['RBT'] }))
 
     // Scheduler routes
@@ -226,6 +255,7 @@ router.group(() => {
       // Treatment Goals (role-based access)
       router.get('/treatment-goals', [TreatmentGoalsController, 'index'])
       router.post('/treatment-goals', [TreatmentGoalsController, 'store'])
+      router.post('/treatment-goals/bulk', [TreatmentGoalsController, 'bulkCreate'])
       router.put('/treatment-goals/:id', [TreatmentGoalsController, 'update'])
       router.delete('/treatment-goals/:id', [TreatmentGoalsController, 'destroy'])
       router.get('/treatment-goals/:id/progress', [TreatmentGoalsController, 'progress'])

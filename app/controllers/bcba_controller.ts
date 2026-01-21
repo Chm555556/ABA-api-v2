@@ -16,26 +16,34 @@ export default class BCBAController {
   async dashboard({ auth, response }: HttpContext) {
     try {
       const user = auth.user!
+      console.log('🔍 BCBA Dashboard - User:', { id: user.id, email: user.email, role: user.role })
 
       // Get assigned clients
+      console.log('📋 Fetching assigned clients...')
       const assignedClients = await Client.query()
         .where('assigned_bcba', user.id)
         .where('status', 'active')
         .preload('assignedRbts')
+      console.log(`✅ Found ${assignedClients.length} assigned clients`)
 
       // Get supervised RBTs
+      console.log('👥 Fetching supervised RBTs...')
       const supervisedRbts = await User.query()
         .where('supervisor_id', user.id)
         .where('role', 'RBT')
         .where('is_active', true)
+      console.log(`✅ Found ${supervisedRbts.length} supervised RBTs`)
 
       // Get pending session reviews
+      console.log('📊 Fetching pending reviews...')
       const pendingReviews = await SessionLog.query()
         .where('bcba_id', user.id)
         .where('status', 'submitted')
         .count('* as total')
+      console.log(`✅ Found ${pendingReviews[0]?.$extras?.total || 0} pending reviews`)
 
       // Get recent sessions for review
+      console.log('📝 Fetching recent sessions...')
       const recentSessions = await SessionLog.query()
         .where('bcba_id', user.id)
         .whereIn('status', ['submitted', 'bcba_approved'])
@@ -43,15 +51,18 @@ export default class BCBAController {
         .preload('rbt')
         .orderBy('created_at', 'desc')
         .limit(10)
+      console.log(`✅ Found ${recentSessions.length} recent sessions`)
 
       // Calculate average quality score (mock calculation)
+      console.log('📈 Calculating quality score...')
       const approvedSessions = await SessionLog.query()
         .where('bcba_id', user.id)
         .where('bcba_approved', true)
-
       const averageQualityScore = approvedSessions.length > 0 ? 4.2 : 0
+      console.log(`✅ Average quality score: ${averageQualityScore}`)
 
       // Get monthly session statistics
+      console.log('📅 Fetching monthly stats...')
       const currentMonth = new Date()
       const monthStart = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1)
       const monthEnd = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0)
@@ -74,44 +85,53 @@ export default class BCBAController {
           monthlyStats[stat.status as keyof typeof monthlyStats] = stat.$extras.total
         }
       })
+      console.log('✅ Monthly stats calculated:', monthlyStats)
 
-      return response.json({
+      // Build response with null-safe operations
+      console.log('🔧 Building response...')
+      const dashboardResponse = {
         summary: {
           activeClients: assignedClients.length,
           supervisedRbts: supervisedRbts.length,
-          pendingReviews: pendingReviews[0].$extras.total,
+          pendingReviews: pendingReviews[0]?.$extras?.total || 0,
           averageQualityScore,
         },
         assignedClients: assignedClients.map(client => ({
           id: client.id,
-          fullName: client.fullName,
-          age: client.age,
-          status: client.status,
-          assignedRbts: client.assignedRbts.map(rbt => rbt.name),
-          admissionDate: client.admissionDate.toISODate(),
+          fullName: client.fullName || `${client.firstName || ''} ${client.lastName || ''}`.trim() || 'Unknown Client',
+          age: client.age || 0,
+          status: client.status || 'unknown',
+          assignedRbts: client.assignedRbts?.map(rbt => rbt.name || 'Unknown RBT') || [],
+          admissionDate: client.admissionDate?.toISODate() || null,
         })),
         supervisedRbts: supervisedRbts.map(rbt => ({
           id: rbt.id,
-          name: rbt.name,
-          email: rbt.email,
-          hourlyRate: rbt.hourlyRate,
-          isActive: rbt.isActive,
+          name: rbt.name || 'Unknown RBT',
+          email: rbt.email || '',
+          hourlyRate: rbt.hourlyRate || 0,
+          isActive: rbt.isActive || false,
         })),
         recentSessions: recentSessions.map(session => ({
           id: session.id,
-          clientName: session.client.fullName,
-          rbtName: session.rbt.name,
-          date: session.date.toISODate(),
-          duration: session.duration,
-          status: session.status,
-          createdAt: session.createdAt.toISO(),
+          clientName: session.client?.fullName || 'Unknown Client',
+          rbtName: session.rbt?.name || 'Unknown RBT',
+          date: session.date?.toISODate() || null,
+          duration: session.duration || 0,
+          status: session.status || 'unknown',
+          createdAt: session.createdAt?.toISO() || null,
         })),
         monthlyStats,
-      })
+      }
+
+      console.log('✅ BCBA Dashboard response built successfully')
+      return response.json(dashboardResponse)
     } catch (error) {
+      console.error('❌ BCBA Dashboard Error:', error)
+      console.error('Stack trace:', error.stack)
       return response.status(500).json({
         message: 'Failed to fetch BCBA dashboard',
         error: error.message,
+        details: error.stack?.split('\n').slice(0, 5).join('\n')
       })
     }
   }
@@ -183,12 +203,46 @@ export default class BCBAController {
             city: client.clinic.city,
             state: client.clinic.state,
           } : null,
-          treatmentGoals: client.treatmentGoals.map(goal => ({
-            id: goal.id,
-            title: goal.title,
-            status: goal.status,
-            measurementType: goal.measurementType,
-          })),
+          treatmentGoals: client.treatmentGoals.map(goal => {
+            // Safely parse JSON fields with fallback for comma-separated strings
+            let promptHierarchy = null
+            if (goal.promptHierarchy) {
+              try {
+                // Try to parse as JSON first
+                promptHierarchy = JSON.parse(goal.promptHierarchy)
+              } catch (e) {
+                // If JSON parsing fails, try to split comma-separated string
+                if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
+                  promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
+                } else if (typeof goal.promptHierarchy === 'string') {
+                  // Single item, wrap in array
+                  promptHierarchy = [goal.promptHierarchy.trim()]
+                } else {
+                  promptHierarchy = null
+                }
+              }
+            }
+
+            return {
+              id: goal.id,
+              title: goal.title,
+              description: goal.description,
+              targetBehavior: goal.targetBehavior,
+              measurementType: goal.measurementType,
+              masteryCriteria: goal.masteryCriteria,
+              status: goal.status,
+              domain: goal.domain,
+              promptHierarchy: promptHierarchy,
+              baselineScore: goal.baselineScore,
+              baselineTrials: goal.baselineTrials,
+              targetPercentage: goal.targetPercentage,
+              consecutiveSessions: goal.consecutiveSessions,
+              goalPhase: goal.goalPhase,
+              createdBy: goal.createdBy,
+              createdAt: goal.createdAt.toISO(),
+              updatedAt: goal.updatedAt?.toISO(),
+            }
+          }),
           admissionDate: client.admissionDate.toISODate(),
           createdAt: client.createdAt.toISO(),
         },
@@ -214,9 +268,10 @@ export default class BCBAController {
         .preload('clinic')
         .preload('assignedRbts')
         .preload('parent')
-        .preload('treatmentGoals', (goalsQuery) => {
-          goalsQuery.where('status', 'active')
-        })
+        // Temporarily disabled to debug
+        // .preload('treatmentGoals', (goalsQuery) => {
+        //   goalsQuery.where('status', 'active')
+        // })
         .orderBy('first_name', 'asc')
 
       console.log('🔍 getClients - Total clients:', clients.length)
@@ -266,10 +321,7 @@ export default class BCBAController {
             name: rbt.name,
             email: rbt.email,
           })),
-          treatmentGoals: client.treatmentGoals.map(goal => ({
-            id: goal.id,
-            title: goal.title,
-          })),
+          treatmentGoals: [], // Temporarily disabled to debug
         })),
       })
     } catch (error) {
@@ -301,9 +353,9 @@ export default class BCBAController {
         data: sessions.all().map(session => ({
           id: session.id,
           clientId: session.clientId,
-          clientName: session.client.fullName,
+          clientName: session.client?.fullName || 'Unknown Client',
           rbtId: session.rbtId,
-          rbtName: session.rbt.name,
+          rbtName: session.rbt?.name || 'Unknown RBT',
           date: session.date.toISODate(),
           startTime: session.startTime,
           endTime: session.endTime,
@@ -733,26 +785,91 @@ export default class BCBAController {
       const user = auth.user!
       const clientId = request.input('clientId')
 
-      let query = TreatmentGoal.query()
-        .where('created_by', user.id)
-        .preload('client')
-
+      // Use raw SQL to avoid model serialization issues with new fields
+      let sqlQuery = `
+        SELECT 
+          tg.id,
+          tg.client_id as clientId,
+          tg.title,
+          tg.description,
+          tg.target_behavior as targetBehavior,
+          tg.measurement_type as measurementType,
+          tg.mastery_criteria as masteryCriteria,
+          tg.status,
+          tg.domain,
+          tg.prompt_hierarchy as promptHierarchy,
+          tg.baseline_score as baselineScore,
+          tg.baseline_trials as baselineTrials,
+          tg.target_percentage as targetPercentage,
+          tg.consecutive_sessions as consecutiveSessions,
+          tg.goal_phase as goalPhase,
+          tg.created_by as createdBy,
+          tg.created_at,
+          tg.updated_at,
+          CONCAT(c.first_name, ' ', c.last_name) as clientName
+        FROM treatment_goals tg
+        LEFT JOIN clients c ON tg.client_id = c.id
+        WHERE tg.created_by = ?
+      `
+      
+      const params = [user.id]
+      
       if (clientId) {
-        query = query.where('client_id', clientId)
+        sqlQuery += ' AND tg.client_id = ?'
+        params.push(clientId)
       }
+      
+      sqlQuery += ' ORDER BY tg.created_at DESC'
+      
+      const rawResult = await db.rawQuery(sqlQuery, params)
+      const goals = rawResult[0] // Get the actual results from the first element
 
-      const goals = await query.orderBy('created_at', 'desc')
+
 
       return response.json({
-        data: goals.map(goal => ({
-          id: goal.id,
-          clientId: goal.clientId,
-          clientName: goal.client?.fullName || 'Unknown Client',
-          title: goal.title,
-          description: goal.description,
-          status: goal.status,
-          createdAt: goal.createdAt.toISO()
-        }))
+        data: goals.map((goal: any) => {
+          // Safely parse JSON fields with fallback for comma-separated strings
+          let promptHierarchy = null
+          if (goal.promptHierarchy) {
+            try {
+              // Try to parse as JSON first
+              promptHierarchy = JSON.parse(goal.promptHierarchy)
+            } catch (e) {
+              // If JSON parsing fails, try to split comma-separated string
+              if (typeof goal.promptHierarchy === 'string' && goal.promptHierarchy.includes(',')) {
+                promptHierarchy = goal.promptHierarchy.split(',').map((item: string) => item.trim())
+              } else if (typeof goal.promptHierarchy === 'string') {
+                // Single item, wrap in array
+                promptHierarchy = [goal.promptHierarchy.trim()]
+              } else {
+                console.warn('Failed to parse promptHierarchy:', goal.promptHierarchy)
+                promptHierarchy = null
+              }
+            }
+          }
+
+          return {
+            id: goal.id,
+            clientId: goal.clientId,
+            clientName: goal.clientName || 'Unknown Client',
+            title: goal.title || '',
+            description: goal.description || '',
+            targetBehavior: goal.targetBehavior || '',
+            measurementType: goal.measurementType || '',
+            masteryCriteria: goal.masteryCriteria || '',
+            status: goal.status || 'active',
+            domain: goal.domain || '',
+            promptHierarchy: promptHierarchy,
+            baselineScore: goal.baselineScore,
+            baselineTrials: goal.baselineTrials,
+            targetPercentage: goal.targetPercentage,
+            consecutiveSessions: goal.consecutiveSessions,
+            goalPhase: goal.goalPhase || 'acquisition',
+            createdBy: goal.createdBy,
+            createdAt: goal.created_at ? new Date(goal.created_at).toISOString() : new Date().toISOString(),
+            updatedAt: goal.updated_at ? new Date(goal.updated_at).toISOString() : null,
+          }
+        })
       })
     } catch (error) {
       console.error('Get treatment goals error:', error)
@@ -764,22 +881,33 @@ export default class BCBAController {
   }
 
   /**
-   * Get users (RBTs supervised by this BCBA)
+   * Get users (RBTs and BCBAs for session creation)
    */
   async getUsers({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
       const role = request.input('role')
+      const limit = request.input('limit', 1000)
 
+      // For session creation, BCBAs need access to all RBTs and BCBAs, not just supervised ones
       let query = User.query()
-        .where('supervisor_id', user.id)
+        .whereIn('role', ['RBT', 'BCBA'])
         .where('is_active', true)
 
       if (role) {
         query = query.where('role', role)
       }
 
-      const users = await query.orderBy('name', 'asc')
+      const users = await query
+        .orderBy('name', 'asc')
+        .limit(limit)
+
+      console.log(`🔍 BCBA getUsers: Found ${users.length} users for BCBA ${user.name}`)
+      console.log(`📋 Users breakdown:`, {
+        rbts: users.filter(u => u.role === 'RBT').length,
+        bcbas: users.filter(u => u.role === 'BCBA').length,
+        currentUserIncluded: users.some(u => u.id === user.id)
+      })
 
       return response.json({
         data: users.map(u => ({
@@ -788,7 +916,8 @@ export default class BCBAController {
           email: u.email,
           role: u.role,
           isActive: u.isActive,
-          phone: u.phone
+          phone: u.phone,
+          clinicId: u.clinicId
         }))
       })
     } catch (error) {
@@ -962,6 +1091,7 @@ export default class BCBAController {
   async getSchedule({ auth, request, response }: HttpContext) {
     try {
       const user = auth.user!
+      const clientId = request.input('clientId')
       const startDate = request.input('startDate')
       const endDate = request.input('endDate')
       const limit = request.input('limit', 1000)
@@ -969,6 +1099,7 @@ export default class BCBAController {
       console.log(`🔍 BCBA Schedule Request:`)
       console.log(`   User ID: ${user.id}`)
       console.log(`   User Role: ${user.role}`)
+      console.log(`   Client ID: ${clientId}`)
       console.log(`   Date Range: ${startDate} to ${endDate}`)
 
       // Build query for sessions where BCBA is assigned
@@ -979,6 +1110,17 @@ export default class BCBAController {
         .preload('participants', (participantsQuery) => {
           participantsQuery.preload('client')
         })
+
+      // Filter by specific client if provided
+      if (clientId) {
+        query = query.where((builder) => {
+          builder
+            .where('client_id', clientId) // For one-to-one sessions
+            .orWhereHas('participants', (participantQuery) => {
+              participantQuery.where('client_id', clientId) // For group sessions
+            })
+        })
+      }
 
       if (startDate) {
         query = query.where('date', '>=', startDate)
@@ -993,7 +1135,7 @@ export default class BCBAController {
         .orderBy('start_time', 'asc')
         .limit(limit)
 
-      console.log(`✅ Found ${sessions.length} sessions for BCBA ${user.id}`)
+      console.log(`✅ Found ${sessions.length} sessions for BCBA ${user.id}${clientId ? ` (filtered by client ${clientId})` : ''}`)
 
       return response.json({
         data: sessions.map(session => ({
@@ -1002,7 +1144,7 @@ export default class BCBAController {
           clientId: session.clientId,
           clientName: session.client ? `${session.client.firstName} ${session.client.lastName}` : null,
           rbtId: session.rbtId,
-          rbtName: session.rbt.name,
+          rbtName: session.rbt?.name || 'Unknown RBT',
           bcbaId: session.bcbaId,
           date: session.date.toISODate(),
           startTime: session.startTime,
@@ -1100,19 +1242,19 @@ export default class BCBAController {
           clinicName: session.client.clinic?.name,
         } : null,
         rbtId: session.rbtId,
-        rbtName: session.rbt.name,
-        rbt: {
+        rbtName: session.rbt?.name || 'Unknown RBT',
+        rbt: session.rbt ? {
           id: session.rbt.id,
           name: session.rbt.name,
           email: session.rbt.email,
-        },
+        } : null,
         bcbaId: session.bcbaId,
-        bcbaName: session.bcba.name,
-        bcba: {
+        bcbaName: session.bcba?.name || 'Unknown BCBA',
+        bcba: session.bcba ? {
           id: session.bcba.id,
           name: session.bcba.name,
           email: session.bcba.email,
-        },
+        } : null,
         date: session.date.toISODate(),
         startTime: session.startTime,
         endTime: session.endTime,
