@@ -777,16 +777,8 @@ export default class ParentController {
     
     console.log('✅ Real tantrums data calculated:', { thisMonthAvg, lastMonthAvg, improvement })
     
-    // Generate date labels in MM-DD format for tantrums
-    const tantrumsDate = new Date()
-    const tantrumsMonth = String(tantrumsDate.getMonth() + 1).padStart(2, '0')
-    const tantrumsDateLabels = [
-      `${tantrumsMonth}-01`,
-      `${tantrumsMonth}-02`, 
-      `${tantrumsMonth}-03`,
-      `${tantrumsMonth}-04`,
-      `${tantrumsMonth}-05`
-    ]
+    // Generate week labels (Week 1, Week 2, etc.)
+    const tantrumsDateLabels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5']
     
     return {
       dates: tantrumsDateLabels,
@@ -886,16 +878,8 @@ export default class ParentController {
     
     console.log('✅ Real communication data calculated:', { thisMonthAvg, lastMonthAvg, improvement })
     
-    // Generate date labels in MM-DD format for communication
-    const commDate = new Date()
-    const commMonth = String(commDate.getMonth() + 1).padStart(2, '0')
-    const commDateLabels = [
-      `${commMonth}-01`,
-      `${commMonth}-02`, 
-      `${commMonth}-03`,
-      `${commMonth}-04`,
-      `${commMonth}-05`
-    ]
+    // Generate week labels (Week 1, Week 2, etc.)
+    const commDateLabels = ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5']
     
     return {
       dates: commDateLabels,
