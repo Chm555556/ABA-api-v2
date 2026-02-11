@@ -25,6 +25,7 @@ const TargetBehaviorController = () => import('#controllers/target_behavior_cont
 const DocumentsController = () => import('#controllers/documents_controller')
 const SessionsController = () => import('#controllers/sessions_controller')
 const SchedulerController = () => import('#controllers/scheduler_controller')
+const LiveAvatarController = () => import('#controllers/live_avatar_controller')
 
 // Health check route
 router.get('/health', async ({ response }) => {
@@ -45,6 +46,14 @@ router.group(() => {
     router.post('/forgot-password', [AuthController, 'forgotPassword'])
     router.post('/reset-password', [AuthController, 'resetPassword'])
   }).prefix('/auth')
+
+ // LiveAvatar routes (public)
+  router.group(() => {
+    router.post('/session/token', [LiveAvatarController, 'createSessionToken'])
+    router.post('/session/start', [LiveAvatarController, 'startSession'])
+    router.get('/knowledge-base', [LiveAvatarController, 'getKnowledgeBase'])
+  }).prefix('/liveavatar')
+
 
   // Protected routes
   router.group(() => {
