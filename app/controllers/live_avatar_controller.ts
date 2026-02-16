@@ -1,12 +1,21 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import axios from 'axios'
+import ParentContextService from '#services/parent_context_service'
+import User from '#models/user'
 
 export default class LiveAvatarController {
+  private parentContextService: ParentContextService
+
+  constructor() {
+    this.parentContextService = new ParentContextService()
+  }
+
   /**
    * Create a LiveAvatar session token
    * This endpoint creates a session token for the LiveAvatar consultation
+   * Accepts optional parent_id to personalize the consultation
    */
-  async createSessionToken({ response }: HttpContext) {
+  async createSessionToken({ request, auth, response }: HttpContext) {
     try {
       const apiKey = process.env.LIVEAVATAR_API_KEY
 
@@ -14,6 +23,57 @@ export default class LiveAvatarController {
         return response.status(500).json({
           error: 'LiveAvatar API key not configured',
         })
+      }
+
+      // Get parent ID from request body or authenticated user
+      let parentId: number | null = null
+      const body = request.only(['parent_id'])
+
+      console.log('=== CREATE SESSION TOKEN ===')
+      console.log('Request body:', body)
+      console.log('Auth user:', auth.user ? { id: auth.user.id, role: auth.user.role } : 'none')
+
+      if (body.parent_id) {
+        parentId = parseInt(body.parent_id)
+        console.log('Parent ID from request body:', parentId)
+
+        // Validate parent_id exists and has role='PARENT'
+        const parent = await User.find(parentId)
+        if (!parent || parent.role !== 'PARENT') {
+          console.log('Invalid parent ID or role:', parent ? parent.role : 'not found')
+          return response.status(400).json({
+            error: 'Invalid parent ID',
+          })
+        }
+        console.log('Parent validated:', parent.name, parent.email)
+      } else if (auth.user && auth.user.role === 'PARENT') {
+        // Use authenticated user's ID if they are a parent
+        parentId = auth.user.id
+        console.log('Parent ID from auth user:', parentId)
+      }
+
+      // Get parent-specific context or use default
+      let contextId = process.env.LIVEAVATAR_CONTEXT_ID || 'default_context'
+      let parentContext = null
+
+      if (parentId) {
+        try {
+          console.log('Fetching parent context for parent_id:', parentId)
+          parentContext = await this.parentContextService.getParentContext(parentId)
+          console.log('Parent context fetched successfully')
+          console.log('Context summary:', parentContext.knowledge_base.parent_summary)
+          console.log('Children details count:', parentContext.knowledge_base.children_details.length)
+          console.log('Recent activity count:', parentContext.knowledge_base.recent_activity.length)
+          console.log('Treatment goals count:', parentContext.knowledge_base.treatment_goals.length)
+
+          // Log session creation with parent_id for auditing
+          console.log(`Session token created for parent ${parentId} at ${new Date().toISOString()}`)
+        } catch (error) {
+          console.error('Failed to get parent context:', error)
+          console.error('Error details:', error.message)
+        }
+      } else {
+        console.log('No parent ID provided, using generic consultation')
       }
 
       // Create session token with LiveAvatar API
@@ -24,7 +84,7 @@ export default class LiveAvatarController {
           avatar_id: process.env.LIVEAVATAR_AVATAR_ID || 'default_avatar',
           avatar_persona: {
             voice_id: process.env.LIVEAVATAR_VOICE_ID || 'default_voice',
-            context_id: process.env.LIVEAVATAR_CONTEXT_ID || 'default_context',
+            context_id: contextId,
             language: 'en',
           },
         },
@@ -37,12 +97,23 @@ export default class LiveAvatarController {
         }
       )
 
-      console.log('session ---> ', sessionResponse.data)
+      console.log('HeyGen session created successfully')
 
-      return response.json({
+      const responseData: any = {
         session_id: sessionResponse.data.data.session_id,
         session_token: sessionResponse.data.data.session_token,
-      })
+      }
+
+      // Include parent context in response if available
+      if (parentContext) {
+        responseData.parent_context = parentContext.knowledge_base
+        responseData.has_personalized_context = true
+        console.log('Including parent context in response')
+      } else {
+        console.log('No parent context to include')
+      }
+
+      return response.json(responseData)
     } catch (error) {
       console.error('LiveAvatar session creation error:', error)
       return response.status(500).json({
@@ -199,5 +270,161 @@ export default class LiveAvatarController {
     }
 
     return response.json(knowledgeBase)
+  }
+
+  /**
+   * Get parent context (view knowledge base)
+   * GET /api/liveavatar/context/:parent_id
+   */
+  async getParentContext({ params, auth, response }: HttpContext) {
+    try {
+      const parentId = parseInt(params.parent_id)
+
+      // Security check: user must be the parent or an admin
+      if (auth.user) {
+        const isAuthorized =
+          auth.user.id === parentId || auth.user.role === 'ADMIN'
+
+        if (!isAuthorized) {
+          return response.status(403).json({
+            error: 'Unauthorized',
+          })
+        }
+      } else {
+        return response.status(401).json({
+          error: 'Authentication required',
+        })
+      }
+
+      // Validate parent exists
+      const parent = await User.find(parentId)
+      if (!parent) {
+        return response.status(404).json({
+          error: 'Parent not found',
+        })
+      }
+
+      if (parent.role !== 'PARENT') {
+        return response.status(400).json({
+          error: 'Invalid parent ID',
+        })
+      }
+
+      // Get parent context
+      const context = await this.parentContextService.getParentContext(parentId)
+
+      return response.json({
+        parent_id: parentId,
+        data: context.knowledge_base,
+        cache_age: context.cache_age,
+        last_updated: context.last_updated,
+      })
+    } catch (error: any) {
+      console.error('Error fetching knowledge base:', error)
+      return response.status(500).json({
+        error: 'Failed to fetch knowledge base',
+        details: error.message,
+      })
+    }
+  }
+
+  /**
+   * Refresh parent context
+   * POST /api/liveavatar/context/refresh
+   */
+  async refreshParentContext({ request, auth, response }: HttpContext) {
+    try {
+      const { parent_id } = request.only(['parent_id'])
+      const parentId = parseInt(parent_id)
+
+      // Security check: user must be the parent or an admin
+      if (auth.user) {
+        const isAuthorized =
+          auth.user.id === parentId || auth.user.role === 'ADMIN'
+
+        if (!isAuthorized) {
+          return response.status(403).json({
+            error: 'Unauthorized',
+          })
+        }
+      } else {
+        return response.status(401).json({
+          error: 'Authentication required',
+        })
+      }
+
+      // Validate parent exists
+      const parent = await User.find(parentId)
+      if (!parent) {
+        return response.status(404).json({
+          error: 'Parent not found',
+        })
+      }
+
+      if (parent.role !== 'PARENT') {
+        return response.status(400).json({
+          error: 'Invalid parent ID',
+        })
+      }
+
+      // Refresh context
+      const context = await this.parentContextService.refreshContext(parentId)
+
+      // Log refresh operation for auditing
+      console.log(
+        `Context refreshed for parent ${parentId} by user ${auth.user.id} at ${new Date().toISOString()}`
+      )
+
+      return response.json({
+        success: true,
+        parent_id: parentId,
+        data: context.knowledge_base,
+        last_updated: context.last_updated,
+      })
+    } catch (error: any) {
+      console.error('Error refreshing context:', error)
+      return response.status(500).json({
+        error: 'Failed to refresh context',
+        details: error.message,
+      })
+    }
+  }
+
+  /**
+   * Debug endpoint to test parent context fetching
+   * GET /api/liveavatar/debug/parent/:parent_id
+   */
+  async debugParentContext({ params, response }: HttpContext) {
+    try {
+      const parentId = parseInt(params.parent_id)
+
+      console.log('=== DEBUG: Fetching parent context for parent_id:', parentId)
+
+      // Get parent context
+      const context = await this.parentContextService.getParentContext(parentId)
+
+      console.log('=== DEBUG: Context fetched successfully')
+      console.log('=== DEBUG: Children count:', context.knowledge_base.children_details.length)
+      console.log('=== DEBUG: Sessions count:', context.knowledge_base.recent_activity.length)
+      console.log('=== DEBUG: Goals count:', context.knowledge_base.treatment_goals.length)
+
+      return response.json({
+        parent_id: parentId,
+        context: context,
+        debug_info: {
+          children_count: context.knowledge_base.children_details.length,
+          sessions_count: context.knowledge_base.recent_activity.length,
+          goals_count: context.knowledge_base.treatment_goals.length,
+          progress_count: context.knowledge_base.progress_highlights.length,
+        },
+      })
+    } catch (error: any) {
+      console.error('=== DEBUG ERROR:', error)
+      return response.status(500).json({
+        error: 'Debug failed',
+        details: error.message,
+        stack: error.stack,
+      })
+    }
   }
 }

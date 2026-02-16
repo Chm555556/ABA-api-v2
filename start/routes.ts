@@ -52,6 +52,13 @@ router.group(() => {
     router.post('/session/token', [LiveAvatarController, 'createSessionToken'])
     router.post('/session/start', [LiveAvatarController, 'startSession'])
     router.get('/knowledge-base', [LiveAvatarController, 'getKnowledgeBase'])
+    
+    // Debug endpoint (remove in production)
+    router.get('/debug/parent/:parent_id', [LiveAvatarController, 'debugParentContext'])
+    
+    // Parent context routes (require authentication)
+    router.get('/context/:parent_id', [LiveAvatarController, 'getParentContext']).use(middleware.auth())
+    router.post('/context/refresh', [LiveAvatarController, 'refreshParentContext']).use(middleware.auth())
   }).prefix('/liveavatar')
 
 
